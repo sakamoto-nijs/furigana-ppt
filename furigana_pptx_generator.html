@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ふりがな PowerPoint 生成ツール</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
+<style>
+  :root{
+    --bg:#faf6f3;
+    --panel:#ffffff;
+    --ink:#2b241f;
+    --sub:#6b5f56;
+    --line:#e8dcd2;
+    --accent:#C43E1C;
+    --accent-dark:#9A3015;
+    --accent-ink:#ffffff;
+    --warn-bg:#fdeee6;
+    --warn-ink:#8a3c1c;
+    --ok-bg:#fdece3;
+    --ok-ink:#9A3015;
+    --skip-bg:#eeeeee;
+    --skip-ink:#666666;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    line-height:1.6;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:40px 20px 100px;}
+  header.hero{margin-bottom:30px;}
+  header.hero h1{
+    font-size:26px;
+    margin:0 0 8px;
+    letter-spacing:.01em;
+    color:var(--accent-dark);
+  }
+  header.hero p{
+    margin:0;
+    color:var(--sub);
+    font-size:14.5px;
+  }
+  .section{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:24px 24px 26px;
+    margin-bottom:20px;
+  }
+  .section h2{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-size:15px;
+    margin:0 0 18px;
+    color:var(--ink);
+  }
+  .section h2 .num{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:22px;height:22px;
+    border-radius:50%;
+    background:var(--accent);
+    color:var(--accent-ink);
+    font-size:11px;
+    font-weight:600;
+  }
+  .field{margin-bottom:16px;}
+  .field:last-child{margin-bottom:0;}
+  .field label{
+    display:block;
+    font-size:12.5px;
+    color:var(--sub);
+    margin-bottom:6px;
+  }
+  .row{display:flex;gap:14px;flex-wrap:wrap;}
+  .row .field{flex:1;min-width:150px;}
+  input[type=number], input[type=text], select{
+    width:100%;
+    padding:9px 10px;
+    border:1px solid var(--line);
+    border-radius:6px;
+    font-size:14px;
+    background:#fff;
+    color:var(--ink);
+  }
+  .hint{font-size:12px;color:var(--sub);margin-top:4px;}
+
+  .dropzone{
+    border:1.5px dashed var(--line);
+    border-radius:8px;
+    padding:28px 16px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+    background:#fffaf7;
+  }
+  .dropzone.drag{border-color:var(--accent); background:#fdece3;}
+  .dropzone .fname{margin-top:10px;font-size:13.5px;color:var(--ink);font-weight:600;}
+  .dropzone .hint{font-size:12.5px;color:var(--sub);margin-top:4px;}
+  input[type=file]{display:none;}
+
+  .badge{
+    display:inline-block;
+    font-size:11px;
+    padding:2px 8px;
+    border-radius:999px;
+    margin-left:8px;
+    font-weight:600;
+    background:var(--ok-bg);
+    color:var(--ok-ink);
+  }
+
+  .btn{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    background:var(--accent);
+    color:var(--accent-ink);
+    border:none;
+    padding:11px 22px;
+    border-radius:7px;
+    font-size:14.5px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .btn:disabled{background:#c9beb5;cursor:not-allowed;}
+
+  .status{
+    margin-top:16px;
+    font-size:13.5px;
+    color:var(--sub);
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .spinner{
+    width:14px;height:14px;
+    border:2px solid var(--line);
+    border-top-color:var(--accent);
+    border-radius:50%;
+    animation:spin .7s linear infinite;
+    display:none;
+  }
+  .spinner.on{display:inline-block;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .notice{
+    border-radius:8px;
+    padding:12px 14px;
+    font-size:13px;
+    margin-bottom:16px;
+    line-height:1.7;
+  }
+  .notice.warn{background:var(--warn-bg);color:var(--warn-ink);}
+  .notice.ok{background:var(--ok-bg);color:var(--ok-ink);}
+
+  .log{
+    margin-top:18px;
+    max-height:360px;
+    overflow-y:auto;
+    border:1px solid var(--line);
+    border-radius:8px;
+  }
+  .log table{width:100%;border-collapse:collapse;font-size:13px;}
+  .log th, .log td{
+    text-align:left;
+    padding:8px 10px;
+    border-bottom:1px solid var(--line);
+    vertical-align:top;
+  }
+  .log th{position:sticky;top:0;background:#fdf6f1;color:var(--sub);font-weight:600;font-size:11.5px;}
+  .log ruby rt{font-size:9px;color:var(--sub);}
+  .log .unresolved{background:#fde3d3;border-bottom:2px dotted var(--warn-ink);cursor:help;}
+  .log .loc{color:var(--sub);font-size:11.5px;white-space:nowrap;}
+  .tag{
+    display:inline-block;
+    font-size:10.5px;
+    padding:1px 7px;
+    border-radius:999px;
+    font-weight:600;
+    white-space:nowrap;
+  }
+  .tag.high{background:var(--ok-bg);color:var(--ok-ink);}
+  .tag.mid{background:#fff4d6;color:#8a6a10;}
+  .tag.skip{background:var(--skip-bg);color:var(--skip-ink);}
+
+  footer.note{
+    text-align:center;
+    color:var(--sub);
+    font-size:12px;
+    margin-top:28px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <h1>ふりがな PowerPoint 生成</h1>
+    <p>アップロードした PowerPoint(.pptx) の日本語漢字の上に、ふりがな用のテキストボックスを自動で重ねて配置します。処理はすべてブラウザ内で完結し、ファイルの内容は外部送信されません。</p>
+  </header>
+
+  <div id="dict-status" style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--sub);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:20px;">
+    <span id="dict-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none;animation:pulse 1.2s ease-in-out infinite;"></span>
+    <span id="dict-status-text">辞書(kuromoji.js)を読み込んでいます…初回は数秒かかることがあります</span>
+  </div>
+  <style>@keyframes pulse{50%{opacity:.3;}}</style>
+
+  <div class="notice warn">
+    <strong>PPTX には Word・Excel のようなネイティブのふりがな機能がありません。</strong>
+    このツールは漢字の位置を推定し、その真上に小さな「ふりがな用テキストボックス」を新規に重ねて配置する方式です。
+    そのため Word/Excel 版と比べて位置精度に限界があります。特に、①テキストボックス幅に応じた自動折返し（推定シミュレーションのため実際とズレる場合あり）、②オートフィット（自動縮小）で縮小率が不確実な場合、③縦書き・ワードアート（テキスト効果）、④プレースホルダーの位置がレイアウト側に依存していて座標を取得できない場合、⑤回転しているテキストボックス、⑥グループ化された図形の中の文字
+    については自動配置が難しいため、下記プレビューで「要確認/スキップ」として表示し、自動では処理しません。生成後は必ず PowerPoint 上でズレがないか目視確認してください。
+  </div>
+
+  <div class="section">
+    <h2><span class="num">01</span>設定</h2>
+    <div class="row">
+      <div class="field">
+        <label for="rubyReadingType">ふりがなの種類</label>
+        <select id="rubyReadingType">
+          <option value="hiragana" selected>ひらがな</option>
+          <option value="katakana">カタカナ</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="rubyOffset">漢字とふりがなの間隔(pt)</label>
+        <input type="number" id="rubyOffset" value="1" step="0.5" min="-5" max="20">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="rubyFontSize">ふりがなフォントサイズ(pt)</label>
+        <input type="number" id="rubyFontSize" min="4" max="72" step="0.5" placeholder="自動">
+        <div class="hint">自動の場合、各文字のフォントサイズの約半分(下限5pt)を自動計算します(例：本文18pt→ふりがな9pt)。スライド内はフォントサイズがまちまちなことが多いため、通常は自動のままを推奨します。</div>
+      </div>
+      <div class="field">
+        <label for="rubyFontName">ふりがなフォント名</label>
+        <select id="rubyFontName">
+          <option value="" selected>自動(元のテキストと同じ)</option>
+          <optgroup label="ゴシック系">
+            <option value="游ゴシック">游ゴシック</option>
+            <option value="游ゴシック Light">游ゴシック Light</option>
+            <option value="メイリオ">メイリオ</option>
+            <option value="MS ゴシック">MS ゴシック</option>
+            <option value="MS Pゴシック">MS Pゴシック</option>
+          </optgroup>
+          <optgroup label="明朝系">
+            <option value="游明朝">游明朝</option>
+            <option value="MS 明朝">MS 明朝</option>
+            <option value="MS P明朝">MS P明朝</option>
+          </optgroup>
+          <optgroup label="ユニバーサルデザイン(読みやすさ重視)">
+            <option value="BIZ UDゴシック">BIZ UDゴシック</option>
+            <option value="BIZ UDPゴシック">BIZ UDPゴシック</option>
+            <option value="BIZ UD明朝">BIZ UD明朝</option>
+            <option value="BIZ UDP明朝">BIZ UDP明朝</option>
+            <option value="UD デジタル 教科書体 NK-R">UD デジタル 教科書体 NK-R</option>
+          </optgroup>
+          <optgroup label="Mac標準">
+            <option value="ヒラギノ角ゴ ProN">ヒラギノ角ゴ ProN</option>
+            <option value="ヒラギノ明朝 ProN">ヒラギノ明朝 ProN</option>
+            <option value="ヒラギノ丸ゴ ProN">ヒラギノ丸ゴ ProN</option>
+          </optgroup>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="overwriteExisting" checked style="width:auto;">
+        <span>このツールで以前生成したふりがなボックスがあれば、削除して再生成する</span>
+      </label>
+      <div class="hint">
+        オフにすると、既にふりがなボックスが追加済みの図形はスキップし、まだ処理していない図形にのみ新規追加します(手直し済みのふりがなを保護したい場合はオフにしてください)。
+      </div>
+    </div>
+    <div class="field">
+      <label for="customDict">カスタム辞書(任意) — 人名や専門用語の読みを指定</label>
+      <textarea id="customDict" rows="3" placeholder="例：&#10;髙橋,たかはし&#10;認定日本語教育機関,にほんごきょういくきかん" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:var(--mono);resize:vertical;"></textarea>
+      <div class="hint">
+        1行に「単語,読み」の形式で指定してください。辞書(kuromoji.js)に登録されていない人名・異体字・専門用語は自動では読みを推定できないため、ここで指定した語が優先されます。
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">02</span>ファイルをアップロード</h2>
+    <div class="dropzone" id="dropzone">
+      <div>ここにファイルをドラッグ、またはクリックして選択</div>
+      <div class="hint">.pptx (PowerPoint)</div>
+      <div class="fname" id="fname"></div>
+    </div>
+    <input type="file" id="fileInput" accept=".pptx">
+  </div>
+
+  <div class="section">
+    <h2><span class="num">03</span>生成</h2>
+    <button class="btn" id="generateBtn" disabled>▶ ふりがなを付けて生成</button>
+    <div class="status">
+      <span class="spinner" id="spinner"></span>
+      <span id="statusText">ファイルを選択してください</span>
+    </div>
+  </div>
+
+  <div class="section" id="previewSection" style="display:none;">
+    <h2><span class="num">04</span>付与したふりがな一覧(プレビュー)</h2>
+    <div id="previewNotice"></div>
+    <div class="log">
+      <table>
+        <thead><tr><th style="width:150px;">位置</th><th style="width:70px;">状態</th><th>内容</th></tr></thead>
+        <tbody id="previewBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer class="note">形態素解析: kuromoji.js(IPADIC) / すべての処理はブラウザ内で完結します</footer>
+</div>
+
+<script>
+/* ============================================================
+ * 共通ユーティリティ (Word/Excel版と同一ロジック)
+ * ============================================================ */
+const KANJI_RE = /[\u4e00-\u9faf\u3400-\u4dbf]/;
+const HIRAGANA_RE = /^[\u3041-\u3096]$/;
+
+let selectedFile = null;
+let tokenizer = null;       // 読み込み完了後のkuromojiインスタンス
+let dictReady = false;
+let dictSettled = false;    // 今回の読み込み試行が(成功/失敗/タイムアウトいずれかで)決着したか
+let dictTimeoutHandle = null;
+
+function containsKanji(s){ return KANJI_RE.test(s); }
+
+function katakanaToHiragana(s){
+  return s.replace(/[\u30a1-\u30f6]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+}
+
+function setDictStatus(text, mode){
+  // mode: "loading" | "ready" | "error"
+  const dot = document.getElementById("dict-status-dot");
+  const textEl = document.getElementById("dict-status-text");
+  textEl.innerHTML = "";
+  const span = document.createElement("span");
+  span.textContent = text;
+  textEl.appendChild(span);
+  if (mode === "ready"){
+    dot.style.background = "#3F7D51";
+    dot.style.animation = "none";
+  } else if (mode === "error"){
+    dot.style.background = "#B7410E";
+    dot.style.animation = "none";
+    const retryBtn = document.createElement("button");
+    retryBtn.textContent = "再試行";
+    retryBtn.style.cssText = "margin-left:10px;font-size:12px;padding:3px 10px;border-radius:5px;border:1px solid var(--accent);background:#fff;color:var(--accent);cursor:pointer;";
+    retryBtn.addEventListener("click", () => {
+      dictSettled = false;
+      tryLoadDict();
+    });
+    textEl.appendChild(retryBtn);
+  } else {
+    dot.style.background = "var(--accent)";
+    dot.style.animation = "pulse 1.2s ease-in-out infinite";
+  }
+}
+
+function updateGenerateButtonState(){
+  const btn = document.getElementById("generateBtn");
+  if (btn) btn.disabled = !(selectedFile && dictReady);
+}
+
+// dict/ フォルダ(kuromoji.js用の辞書一式、base.dat.gz 等)を、このHTMLファイルと
+// 同じ階層に配置しておく必要がある。file:// で直接開いた場合、ブラウザによっては
+// 辞書ファイルの読み込み(XHR)がセキュリティ制限でブロックされ、エラーにもならず
+// 無反応のまま止まることがあるため、20秒でタイムアウトして再試行UIを表示する。
+function tryLoadDict(){
+  dictSettled = false;
+  clearTimeout(dictTimeoutHandle);
+  setDictStatus("辞書(kuromoji.js)を読み込んでいます…初回は数秒かかることがあります", "loading");
+
+  dictTimeoutHandle = setTimeout(() => {
+    if (dictSettled) return;
+    dictSettled = true;
+    setDictStatus(
+      "辞書の読み込みに時間がかかりすぎています。dict フォルダ(base.dat.gz 等)がこの HTML ファイルと同じ階層にあるか、file:// ではなく http(s):// 経由(簡易ローカルサーバー等)で開いているかをご確認ください。",
+      "error"
+    );
+  }, 20000);
+
+  try{
+    kuromoji.builder({ dicPath: "dict/" }).build((err, builtTokenizer) => {
+      if (dictSettled) return;
+      dictSettled = true;
+      clearTimeout(dictTimeoutHandle);
+      if (err){
+        console.error(err);
+        setDictStatus("辞書の読み込みに失敗しました(dict フォルダが見つからない可能性があります): " + (err && err.message ? err.message : String(err)), "error");
+        return;
+      }
+      tokenizer = builtTokenizer;
+      dictReady = true;
+      setDictStatus("辞書の読み込みが完了しました。ふりがなを生成できます。", "ready");
+      updateGenerateButtonState();
+    });
+  } catch(e){
+    if (dictSettled) return;
+    dictSettled = true;
+    clearTimeout(dictTimeoutHandle);
+    console.error(e);
+    setDictStatus("辞書の読み込みでエラーが発生しました: " + (e && e.message ? e.message : String(e)), "error");
+  }
+}
+
+function readingTypeSuffix(){
+  return document.getElementById("rubyReadingType").value === "katakana" ? "katakana" : "hiragana";
+}
+
+// カスタム辞書: "髙橋,たかはし" のような行 (カンマ/タブ/読点/空白区切り)。
+// 長い語から優先的にマッチさせる。
+function parseCustomDict(){
+  const raw = document.getElementById("customDict") ? document.getElementById("customDict").value : "";
+  const entries = [];
+  for (const line of raw.split(/\r?\n/)){
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/[,\t、]+|\s+/).filter(Boolean);
+    if (parts.length >= 2) entries.push({ term: parts[0], reading: parts[1] });
+  }
+  entries.sort((a,b) => b.term.length - a.term.length);
+  return entries;
+}
+
+function findCustomRanges(text, customDict, toHira){
+  const used = new Array(text.length).fill(false);
+  const ranges = [];
+  for (const entry of customDict){
+    let from = 0;
+    while (true){
+      const idx = text.indexOf(entry.term, from);
+      if (idx === -1) break;
+      const end = idx + entry.term.length;
+      let overlap = false;
+      for (let i=idx;i<end;i++) if (used[i]) { overlap = true; break; }
+      if (!overlap){
+        const reading = toHira ? katakanaToHiragana(entry.reading) : entry.reading;
+        ranges.push({ sb: idx, eb: end, reading, custom: true });
+        for (let i=idx;i<end;i++) used[i] = true;
+      }
+      from = idx + 1;
+    }
+  }
+  return { ranges, used };
+}
+
+// 送り仮名のトリム: 「大きい」→ 漢字部分「大」+読み「おお」、「きい」は素のひらがなとして残す。
+function trimOkuriganaCount(surface, readingHiragana){
+  let sPos = surface.length, rPos = readingHiragana.length, trimCount = 0;
+  while (sPos > 0 && rPos > 0){
+    const sChar = surface[sPos-1];
+    const rChar = readingHiragana[rPos-1];
+    if (!HIRAGANA_RE.test(sChar)) break;
+    if (sChar !== rChar) break;
+    sPos--; rPos--; trimCount++;
+  }
+  return trimCount;
+}
+
+function getFuriganaRanges(text, tokenizer){
+  const toHira = readingTypeSuffix() === "hiragana";
+  const customDict = parseCustomDict();
+  const { ranges: customRanges, used } = findCustomRanges(text, customDict, toHira);
+
+  const tokens = tokenizer.tokenize(text);
+  const autoRanges = [];
+  const unresolved = [];
+  let pos = 0;
+  for (const t of tokens){
+    const surface = t.surface_form;
+    const start = pos, end = pos + surface.length;
+    pos = end;
+    if (!containsKanji(surface)) continue;
+    let overlapsUsed = false;
+    for (let i=start;i<end;i++) if (used[i]) { overlapsUsed = true; break; }
+    if (overlapsUsed) continue;
+    if (t.reading){
+      const readingHiragana = katakanaToHiragana(t.reading);
+      const finalReadingFull = toHira ? readingHiragana : t.reading;
+      const trimCount = trimOkuriganaCount(surface, readingHiragana);
+      const newEnd = end - trimCount;
+      const reading = trimCount > 0 ? finalReadingFull.slice(0, finalReadingFull.length - trimCount) : finalReadingFull;
+      autoRanges.push({ sb:start, eb:newEnd, reading, custom:false });
+    } else {
+      unresolved.push({ sb:start, eb:end, surface });
+    }
+  }
+  const ranges = customRanges.concat(autoRanges).sort((a,b) => a.sb - b.sb);
+  return { ranges, unresolved };
+}
+
+function setStatus(msg, spinning){
+  document.getElementById("statusText").textContent = msg;
+  document.getElementById("spinner").classList.toggle("on", !!spinning);
+}
+
+function addPreviewRow(loc, tagHtml, contentHtml){
+  const tbody = document.getElementById("previewBody");
+  const tr = document.createElement("tr");
+  const tdLoc = document.createElement("td");
+  tdLoc.className = "loc";
+  tdLoc.textContent = loc;
+  const tdTag = document.createElement("td");
+  tdTag.innerHTML = tagHtml;
+  const tdText = document.createElement("td");
+  tdText.innerHTML = contentHtml;
+  tr.appendChild(tdLoc);
+  tr.appendChild(tdTag);
+  tr.appendChild(tdText);
+  tbody.appendChild(tr);
+}
+
+function buildRubyHtml(text, ranges, unresolved, skippedSpans){
+  const marks = ranges.map(r => ({ sb:r.sb, eb:r.eb, type:"ruby", reading:r.reading }))
+    .concat((unresolved || []).map(u => ({ sb:u.sb, eb:u.eb, type:"unresolved" })))
+    .concat((skippedSpans || []).map(u => ({ sb:u.sb, eb:u.eb, type:"skipped" })))
+    .sort((a,b) => a.sb - b.sb);
+  let html = "";
+  let cursor = 0;
+  for (const m of marks){
+    if (m.sb < cursor) continue;
+    html += escapeHtml(text.slice(cursor, m.sb));
+    const chunk = escapeHtml(text.slice(m.sb, m.eb));
+    if (m.type === "ruby"){
+      html += "<ruby>" + chunk + "<rt>" + escapeHtml(m.reading) + "</rt></ruby>";
+    } else if (m.type === "unresolved"){
+      html += '<span class="unresolved" title="辞書から読みを特定できませんでした">' + chunk + "</span>";
+    } else {
+      html += '<span class="unresolved" title="行の折返し推定位置をまたぐため、位置がずれる恐れがあり配置を見送りました">' + chunk + "</span>";
+    }
+    cursor = m.eb;
+  }
+  html += escapeHtml(text.slice(cursor));
+  return html;
+}
+
+function escapeHtml(s){
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function escapeXmlText(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function escapeXmlAttr(s){
+  return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+/* ============================================================
+ * PPTX (OOXML) 定数・XMLパース補助
+ * ============================================================ */
+const P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main";
+const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const EMU_PER_PT = 12700;
+const LINE_SPACING = 1.2;          // 行送り係数(概算)
+const DEFAULT_FONT_SIZE_PT = 18;   // rPr に sz が無い場合のフォールバック
+const DEFAULT_FONT_NAME = "游ゴシック";
+const FURIGANA_PREFIX = "AutoFurigana";
+
+function firstEl(parentEl, ns, local){
+  if (!parentEl) return null;
+  const list = parentEl.getElementsByTagNameNS(ns, local);
+  return list.length ? list[0] : null;
+}
+
+// 生XML中の "<tagName ...>...</tagName>" ブロックをドキュメント順に検出する
+// (Word/Excel版と同じ「DOMは解析のみ・書き込みは生テキストへの直接splice」方針)
+function findContainerBlocks(rawText, tagName){
+  const re = new RegExp(`<${tagName}\\b[^>]*>[\\s\\S]*?<\\/${tagName}>|<${tagName}\\b[^>]*\\/>`, "g");
+  const blocks = [];
+  let m;
+  while ((m = re.exec(rawText)) !== null){
+    const full = m[0];
+    blocks.push({ start: m.index, end: m.index + full.length, text: full });
+  }
+  return blocks;
+}
+
+function applyReplacements(rawText, edits){
+  const sorted = edits.slice().sort((a,b) => b.start - a.start);
+  let result = rawText;
+  for (const e of sorted){
+    result = result.slice(0, e.start) + e.text + result.slice(e.end);
+  }
+  return result;
+}
+
+/* ============================================================
+ * Canvas による文字幅計測 (フォントサイズをそのまま px として扱うことで、
+ * 「1 計測単位 = 1pt = 12700 EMU」という単純な換算にしている。
+ * 実際のフォントが受け手のPCに無い場合は代替フォントで幅が変わるため、
+ * これはあくまで概算であることに留意。)
+ * ============================================================ */
+const measureCanvas = document.createElement("canvas");
+const measureCtx = measureCanvas.getContext("2d");
+
+function fontCss(m){
+  return `${m.bold ? "bold " : ""}${m.italic ? "italic " : ""}${m.sz}px "${m.font}"`;
+}
+function charWidthPt(ch, m){
+  measureCtx.font = fontCss(m);
+  return measureCtx.measureText(ch).width;
+}
+function substrWidthPt(flat, meta, start, end){
+  let w = 0;
+  for (let i=start; i<end; i++) w += charWidthPt(flat[i], meta[i]);
+  return w;
+}
+function textWidthPt(text, font, sz, bold){
+  measureCtx.font = fontCss({font, sz, bold, italic:false});
+  return measureCtx.measureText(text).width;
+}
+
+/* ============================================================
+ * スライド1図形(p:sp)の解析
+ * ============================================================ */
+function readSpcPts(pPrEl, tagLocal){
+  if (!pPrEl) return 0;
+  const el = firstEl(pPrEl, A_NS, tagLocal);
+  if (!el) return 0;
+  const pts = firstEl(el, A_NS, "spcPts");
+  if (pts && pts.getAttribute("val")) return parseInt(pts.getAttribute("val"), 10) / 100;
+  return 0; // spcPct(相対%指定)は概算のため未対応、0として扱う
+}
+
+// 図形の位置・サイズ・回転・縦書き・ワードアート等を確認し、対応可否を判定する。
+// 対応不可の場合は null ではなく reason 文字列を返す({supported:false, reason})。
+function analyzeShape(spEl){
+  const spPr = firstEl(spEl, P_NS, "spPr");
+  if (!spPr) return { supported:false, reason:"図形情報を取得できません" };
+  const xfrm = firstEl(spPr, A_NS, "xfrm");
+  if (!xfrm) return { supported:false, reason:"位置情報がプレースホルダー(レイアウト側)に依存しており取得できません" };
+  const rot = xfrm.getAttribute("rot");
+  if (rot && parseInt(rot, 10) !== 0){
+    return { supported:false, reason:"回転しているテキストボックスのため非対応" };
+  }
+  const off = firstEl(xfrm, A_NS, "off");
+  const ext = firstEl(xfrm, A_NS, "ext");
+  if (!off || !ext) return { supported:false, reason:"位置・サイズ情報を取得できません" };
+
+  const txBody = firstEl(spEl, P_NS, "txBody");
+  if (!txBody) return { supported:false, reason:"テキストを含まない図形" };
+  const bodyPr = firstEl(txBody, A_NS, "bodyPr");
+  const vert = bodyPr ? (bodyPr.getAttribute("vert") || "horz") : "horz";
+  if (vert !== "horz"){
+    return { supported:false, reason:"縦書きテキストのため非対応" };
+  }
+  if (bodyPr){
+    const warp = firstEl(bodyPr, A_NS, "prstTxWarp");
+    if (warp && warp.getAttribute("prst") && warp.getAttribute("prst") !== "textNoShape"){
+      return { supported:false, reason:"ワードアート(テキスト変形効果)のため非対応" };
+    }
+  }
+
+  let fontScale = 1;
+  let approxAutofit = false;
+  if (bodyPr){
+    const normAutofit = firstEl(bodyPr, A_NS, "normAutofit");
+    if (normAutofit && normAutofit.getAttribute("fontScale")){
+      fontScale = parseInt(normAutofit.getAttribute("fontScale"), 10) / 100000;
+      approxAutofit = true;
+    }
+  }
+
+  const wrap = bodyPr ? (bodyPr.getAttribute("wrap") || "square") : "square";
+  const lIns = bodyPr && bodyPr.getAttribute("lIns") != null ? parseInt(bodyPr.getAttribute("lIns"),10) : 91440;
+  const tIns = bodyPr && bodyPr.getAttribute("tIns") != null ? parseInt(bodyPr.getAttribute("tIns"),10) : 45720;
+  const rIns = bodyPr && bodyPr.getAttribute("rIns") != null ? parseInt(bodyPr.getAttribute("rIns"),10) : 91440;
+
+  const paragraphs = Array.from(txBody.getElementsByTagNameNS(A_NS, "p")).filter(p => p.parentNode === txBody);
+
+  return {
+    supported: true,
+    x: parseInt(off.getAttribute("x"),10),
+    y: parseInt(off.getAttribute("y"),10),
+    cx: parseInt(ext.getAttribute("cx"),10),
+    cy: parseInt(ext.getAttribute("cy"),10),
+    wrap, fontScale, approxAutofit, lIns, tIns, rIns, paragraphs
+  };
+}
+
+// 段落内の <a:r>(ラン) / <a:br>(改行) をフラグメント列に変換
+function paragraphFragments(pEl, fontScale){
+  const pPrEl = firstEl(pEl, A_NS, "pPr");
+  const algn = pPrEl ? (pPrEl.getAttribute("algn") || "l") : "l";
+  const fragments = [];
+  for (const child of Array.from(pEl.children)){
+    const ln = child.localName;
+    if (ln === "r"){
+      const rPr = firstEl(child, A_NS, "rPr");
+      const t = firstEl(child, A_NS, "t");
+      const text = t ? t.textContent : "";
+      if (!text) continue;
+      let sz = DEFAULT_FONT_SIZE_PT;
+      if (rPr && rPr.getAttribute("sz")) sz = parseInt(rPr.getAttribute("sz"),10) / 100;
+      sz = sz * fontScale;
+      const bold = !!(rPr && rPr.getAttribute("b") === "1");
+      const italic = !!(rPr && rPr.getAttribute("i") === "1");
+      let font = DEFAULT_FONT_NAME;
+      if (rPr){
+        const ea = firstEl(rPr, A_NS, "ea");
+        const latin = firstEl(rPr, A_NS, "latin");
+        if (ea && ea.getAttribute("typeface")) font = ea.getAttribute("typeface");
+        else if (latin && latin.getAttribute("typeface")) font = latin.getAttribute("typeface");
+      }
+      fragments.push({ text, sz, font, bold, italic, isBreak:false });
+    } else if (ln === "br"){
+      fragments.push({ text:"", sz:DEFAULT_FONT_SIZE_PT * fontScale, font:DEFAULT_FONT_NAME, bold:false, italic:false, isBreak:true });
+    }
+  }
+  const endParaRPr = firstEl(pEl, A_NS, "endParaRPr");
+  let emptyLineSz = DEFAULT_FONT_SIZE_PT * fontScale;
+  if (endParaRPr && endParaRPr.getAttribute("sz")) emptyLineSz = (parseInt(endParaRPr.getAttribute("sz"),10)/100) * fontScale;
+  return { algn, fragments, emptyLineSz, pPrEl };
+}
+
+function flattenFragments(fragments){
+  let flat = "";
+  const meta = [];
+  const breaksAfter = [];
+  for (const f of fragments){
+    if (f.isBreak){ breaksAfter.push(flat.length); continue; }
+    for (const ch of f.text){
+      flat += ch;
+      meta.push({ sz:f.sz, font:f.font, bold:f.bold, italic:f.italic });
+    }
+  }
+  return { flat, meta, breaksAfter };
+}
+
+// wrap="square" の場合、利用可能幅に基づき貪欲法で行分割をシミュレートする
+// (PowerPoint 自身の禁則処理等は再現していない概算)。wrap="none" の場合は
+// 改行(<a:br/>)以外では折り返さない。
+function computeLines(flat, meta, breaksAfter, wrap, availWidthPt){
+  const segments = [];
+  let segStart = 0;
+  const sortedBreaks = breaksAfter.slice().sort((a,b)=>a-b);
+  for (const b of sortedBreaks){ segments.push([segStart,b]); segStart = b; }
+  segments.push([segStart, flat.length]);
+
+  const lines = [];
+  for (const [segStart, segEnd] of segments){
+    if (segEnd <= segStart){ lines.push({ start:segStart, end:segEnd, wrapped:false }); continue; }
+    if (wrap === "none"){
+      lines.push({ start:segStart, end:segEnd, wrapped:false });
+      continue;
+    }
+    let lineStart = segStart, w = 0, wrappedAny = false;
+    for (let i=segStart; i<segEnd; i++){
+      const cw = charWidthPt(flat[i], meta[i]);
+      if (w + cw > availWidthPt && i > lineStart){
+        lines.push({ start:lineStart, end:i, wrapped:true });
+        lineStart = i; w = 0; wrappedAny = true;
+      }
+      w += cw;
+    }
+    lines.push({ start:lineStart, end:segEnd, wrapped:wrappedAny });
+  }
+  return lines;
+}
+
+function rubyFontOverrides(){
+  const nameEl = document.getElementById("rubyFontName");
+  const sizeEl = document.getElementById("rubyFontSize");
+  const name = nameEl && nameEl.value.trim() ? nameEl.value.trim() : null;
+  const size = sizeEl && sizeEl.value.trim() ? parseFloat(sizeEl.value.trim()) : null;
+  return { name, size };
+}
+
+function autoRubySize(mainSizePt){
+  return Math.max(Math.round(mainSizePt / 2), 5);
+}
+
+// 図形1つ分のレイアウトを計算し、ふりがなボックス群のXML断片とプレビュー情報を返す
+function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize){
+  const availWidthPt = (info.cx - info.lIns - info.rIns) / EMU_PER_PT;
+  let curYPt = info.tIns / EMU_PER_PT;
+  const newShapesXml = [];
+  const previewEntries = []; // {text, ranges, unresolved, skippedSpans}
+
+  let paraIdx = 0;
+  for (const pEl of info.paragraphs){
+    const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale);
+    const { flat, meta, breaksAfter } = flattenFragments(fragments);
+
+    const pPrEl = firstEl(pEl, A_NS, "pPr");
+    curYPt += readSpcPts(pPrEl, "spcBef");
+
+    const lines = computeLines(flat, meta, breaksAfter, info.wrap, availWidthPt);
+    const linesWithY = [];
+    for (const line of lines){
+      const maxSz = line.end > line.start
+        ? Math.max.apply(null, meta.slice(line.start, line.end).map(m => m.sz))
+        : emptyLineSz;
+      const heightPt = maxSz * LINE_SPACING;
+      linesWithY.push({ ...line, topPt: curYPt, heightPt });
+      curYPt += heightPt;
+    }
+    curYPt += readSpcPts(pPrEl, "spcAft");
+
+    if (containsKanji(flat)){
+      const { ranges, unresolved } = getFuriganaRanges(flat, tokenizer);
+      const skippedSpans = [];
+      let tokIdx = 0;
+
+      for (const range of ranges){
+        const line = linesWithY.find(l => l.start <= range.sb && range.eb <= l.end);
+        if (!line){
+          skippedSpans.push({ sb:range.sb, eb:range.eb });
+          continue;
+        }
+        const lineWidthPt = substrWidthPt(flat, meta, line.start, line.end);
+        let startOffsetPt = 0;
+        if (algn === "r") startOffsetPt = Math.max(availWidthPt - lineWidthPt, 0);
+        else if (algn === "ctr") startOffsetPt = Math.max((availWidthPt - lineWidthPt) / 2, 0);
+
+        const kanjiStartPt = startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb);
+        const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb);
+        const tokenMeta = meta[range.sb];
+
+        const rubySizePt = userSize || autoRubySize(tokenMeta.sz);
+        const rubyFont = userFont || tokenMeta.font;
+        const rubyTextWidthPt = textWidthPt(range.reading, rubyFont, rubySizePt, false) * 1.08;
+        const boxWidthPt = Math.max(kanjiWidthPt, rubyTextWidthPt);
+        const boxXPt = kanjiStartPt - (boxWidthPt - kanjiWidthPt) / 2;
+        const rubyHeightPt = rubySizePt * 1.3;
+        const boxYPt = line.topPt - rubyHeightPt - offsetPt;
+
+        const xEmu = info.x + boxXPt * EMU_PER_PT;
+        const yEmu = info.y + boxYPt * EMU_PER_PT;
+        const cxEmu = boxWidthPt * EMU_PER_PT;
+        const cyEmu = rubyHeightPt * EMU_PER_PT;
+
+        const newId = nextIdRef.value++;
+        const name = `${FURIGANA_PREFIX}|orig=${shapeId}|p=${paraIdx}|tok=${tokIdx}`;
+        newShapesXml.push(buildFuriganaShapeXml(newId, name, xEmu, yEmu, cxEmu, cyEmu, range.reading, rubySizePt, rubyFont));
+        tokIdx++;
+      }
+      previewEntries.push({ text:flat, ranges, unresolved, skippedSpans, wrapUncertain: lines.some(l => l.wrapped) });
+    }
+    paraIdx++;
+  }
+
+  return { newShapesXml, previewEntries };
+}
+
+function buildFuriganaShapeXml(id, name, xEmu, yEmu, cxEmu, cyEmu, text, fontPt, fontName){
+  const szAttr = Math.max(Math.round(fontPt * 100), 100);
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>`
+    + `<p:spPr><a:xfrm><a:off x="${Math.round(xEmu)}" y="${Math.round(yEmu)}"/><a:ext cx="${Math.max(Math.round(cxEmu),1)}" cy="${Math.max(Math.round(cyEmu),1)}"/></a:xfrm>`
+    + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>`
+    + `<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr" anchorCtr="1"><a:noAutofit/></a:bodyPr><a:lstStyle/>`
+    + `<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="ja-JP" sz="${szAttr}" dirty="0"><a:latin typeface="${escapeXmlAttr(fontName)}"/><a:ea typeface="${escapeXmlAttr(fontName)}"/></a:rPr><a:t>${escapeXmlText(text)}</a:t></a:r></a:p>`
+    + `</p:txBody></p:sp>`;
+}
+
+/* ============================================================
+ * スライドXML単位の処理 (生テキストへの直接splice方式。DOMは解析のみに使用)
+ * ============================================================ */
+function overwriteExistingEnabled(){
+  const el = document.getElementById("overwriteExisting");
+  return el ? el.checked : true;
+}
+
+function stripAutoFuriganaShapes(rawXml){
+  const blocks = findContainerBlocks(rawXml, "p:sp");
+  const edits = [];
+  for (const b of blocks){
+    if (b.text.indexOf(`name="${FURIGANA_PREFIX}`) !== -1){
+      edits.push({ start:b.start, end:b.end, text:"" });
+    }
+  }
+  return edits.length ? applyReplacements(rawXml, edits) : rawXml;
+}
+
+function collectSkipOrigIds(rawXml){
+  const ids = new Set();
+  const re = new RegExp(`name="${FURIGANA_PREFIX}\\|orig=(\\d+)\\|`, "g");
+  let m;
+  while ((m = re.exec(rawXml)) !== null) ids.add(m[1]);
+  return ids;
+}
+
+function maxShapeId(rawXml){
+  let max = 0;
+  const re = /<p:cNvPr\s+id="(\d+)"/g;
+  let m;
+  while ((m = re.exec(rawXml)) !== null){
+    const n = parseInt(m[1], 10);
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFont, userSize, onProgress){
+  let rawXml = rawXmlIn;
+  const overwrite = overwriteExistingEnabled();
+  if (overwrite){
+    rawXml = stripAutoFuriganaShapes(rawXml);
+  }
+  const skipOrigIds = overwrite ? new Set() : collectSkipOrigIds(rawXml);
+
+  const doc = new DOMParser().parseFromString(rawXml, "text/xml");
+  const spTreeList = doc.getElementsByTagNameNS(P_NS, "spTree");
+  if (!spTreeList.length) return rawXml;
+  const spTree = spTreeList[0];
+
+  const shapeEls = Array.from(spTree.children).filter(c => c.localName === "sp");
+  const nextIdRef = { value: maxShapeId(rawXml) + 1 };
+
+  let allNewShapesXml = "";
+
+  for (const spEl of shapeEls){
+    const cNvPr = firstEl(spEl, P_NS, "cNvPr");
+    const shapeId = cNvPr ? cNvPr.getAttribute("id") : "?";
+    const shapeName = cNvPr ? (cNvPr.getAttribute("name") || "") : "";
+    if (shapeName.indexOf(FURIGANA_PREFIX) === 0) continue; // 生成済みふりがなボックス自身はスキップ
+
+    if (skipOrigIds.has(shapeId)){
+      onProgress && onProgress(`${slideLabel} / 図形#${shapeId}`, '<span class="tag skip">スキップ</span>', "既にふりがな付与済み(上書き設定オフのためスキップ)");
+      continue;
+    }
+
+    const info = analyzeShape(spEl);
+    if (!info.supported){
+      // テキストに漢字が含まれる場合のみ、非対応であることをログに残す(無関係な図形まで出すとログが埋もれるため)
+      const txBody = firstEl(spEl, P_NS, "txBody");
+      const quickText = txBody ? txBody.textContent : "";
+      if (containsKanji(quickText)){
+        onProgress && onProgress(`${slideLabel} / 図形#${shapeId}`, '<span class="tag skip">未対応</span>', escapeHtml(info.reason) + "：" + escapeHtml(quickText.slice(0,40)));
+      }
+      continue;
+    }
+
+    const { newShapesXml, previewEntries } = layoutShapeAndBuildFurigana(
+      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize
+    );
+    if (newShapesXml.length) allNewShapesXml += newShapesXml.join("");
+
+    for (const entry of previewEntries){
+      const html = buildRubyHtml(entry.text, entry.ranges, entry.unresolved, entry.skippedSpans);
+      const tag = entry.skippedSpans.length > 0
+        ? '<span class="tag mid">要確認</span>'
+        : (entry.wrapUncertain ? '<span class="tag mid">推定折返し</span>' : '<span class="tag high">高精度</span>');
+      onProgress && onProgress(`${slideLabel} / 図形#${shapeId}`, tag, html);
+    }
+  }
+
+  if (allNewShapesXml){
+    const idx = rawXml.lastIndexOf("</p:spTree>");
+    if (idx !== -1){
+      rawXml = rawXml.slice(0, idx) + allNewShapesXml + rawXml.slice(idx);
+    }
+  }
+  return rawXml;
+}
+
+async function processPptx(arrayBuffer, onProgress){
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const { name: userFontName, size: userFontSize } = rubyFontOverrides();
+  const offsetEl = document.getElementById("rubyOffset");
+  const offsetPt = offsetEl && offsetEl.value.trim() !== "" ? parseFloat(offsetEl.value.trim()) : 1;
+
+  const slidePaths = Object.keys(zip.files)
+    .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+    .sort((a,b) => {
+      const na = parseInt(a.match(/slide(\d+)\.xml$/)[1], 10);
+      const nb = parseInt(b.match(/slide(\d+)\.xml$/)[1], 10);
+      return na - nb;
+    });
+
+  for (const slidePath of slidePaths){
+    const num = slidePath.match(/slide(\d+)\.xml$/)[1];
+    const rawXml = await zip.file(slidePath).async("string");
+    const newXml = await processSlideXml(
+      rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress
+    );
+    if (newXml !== rawXml) zip.file(slidePath, newXml);
+    await new Promise(requestAnimationFrame); // UIを固まらせない
+  }
+
+  return await zip.generateAsync({ type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.presentationml.presentation" });
+}
+
+/* ---------------- UI 配線 ---------------- */
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const generateBtn = document.getElementById("generateBtn");
+const fnameEl = document.getElementById("fname");
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", (e) => {
+  if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+tryLoadDict();
+
+function handleFile(file){
+  const name = file.name.toLowerCase();
+  if (!name.endsWith(".pptx")){
+    setStatus("pptx ファイルを選択してください", false);
+    return;
+  }
+  selectedFile = file;
+  fnameEl.innerHTML = escapeHtml(file.name) + `<span class="badge">PowerPoint</span>`;
+  updateGenerateButtonState();
+  setStatus(dictReady ? "準備完了。「ふりがなを付けて生成」を押してください" : "辞書の読み込み完了後に生成できます", false);
+  document.getElementById("previewSection").style.display = "none";
+  document.getElementById("previewBody").innerHTML = "";
+}
+
+generateBtn.addEventListener("click", async () => {
+  if (!selectedFile) return;
+  if (!dictReady){
+    setStatus("辞書がまだ読み込まれていません。上部の読み込み状況をご確認ください。", false);
+    return;
+  }
+  generateBtn.disabled = true;
+  document.getElementById("previewBody").innerHTML = "";
+  document.getElementById("previewSection").style.display = "block";
+  const overwriteNote = overwriteExistingEnabled()
+    ? "このツールで以前追加したふりがなボックスは削除して再生成します。"
+    : "既にふりがなボックスが追加済みの図形はスキップします。";
+  document.getElementById("previewNotice").innerHTML =
+    `<div class="notice ok">漢字の上にふりがな用テキストボックスを新規に重ねて配置します。${overwriteNote}` +
+    `<br>タグの意味 — <span class="tag high">高精度</span>：折返しのない1行として位置を確定できたもの　` +
+    `<span class="tag mid">推定折返し／要確認</span>：自動折返しをシミュレーションで推定したもの、または行をまたぐため配置を見送った語を含むもの　` +
+    `<span class="tag skip">未対応/スキップ</span>：縦書き・回転・ワードアート等で自動配置できない図形</div>`;
+
+  try{
+    setStatus("スライドを解析してふりがなを配置しています…", true);
+
+    const arrayBuffer = await selectedFile.arrayBuffer();
+    const onProgress = (loc, tagHtml, contentHtml) => addPreviewRow(loc, tagHtml, contentHtml);
+    const blob = await processPptx(arrayBuffer, onProgress);
+
+    const baseName = selectedFile.name.replace(/\.pptx$/i, "");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${baseName}_furigana.pptx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+    setStatus("完了しました。ダウンロードを確認し、PowerPoint 上でズレがないか目視確認してください。", false);
+  } catch (err){
+    console.error(err);
+    setStatus("エラーが発生しました: " + (err && err.message ? err.message : String(err)), false);
+  } finally {
+    generateBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

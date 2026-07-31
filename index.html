@@ -565,7 +565,6 @@ function escapeXmlAttr(s){
 const P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main";
 const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const EMU_PER_PT = 12700;
-const LINE_SPACING = 1.2;          // 行送り係数(概算)
 const DEFAULT_FONT_SIZE_PT = 18;   // rPr に sz が無い場合のフォールバック
 const DEFAULT_FONT_NAME = "游ゴシック";
 const FURIGANA_PREFIX = "AutoFurigana";
@@ -634,6 +633,26 @@ function readSpcPts(pPrEl, tagLocal){
   const pts = firstEl(el, A_NS, "spcPts");
   if (pts && pts.getAttribute("val")) return parseInt(pts.getAttribute("val"), 10) / 100;
   return 0; // spcPct(相対%指定)は概算のため未対応、0として扱う
+}
+
+// 段落の行間設定(a:lnSpc)を読み取る。
+// spcPct(フォントサイズに対する割合、例:150000=150%): 行の高さ = フォントサイズ×1.2×(val/100000)
+//   (1.2は「シングルスペース」自体がフォントサイズの約1.2倍という一般的な近似値)
+// spcPts(絶対値、val=1/100pt単位): フォントサイズに関わらずその絶対値を行の高さとして使う
+// 指定が無い場合は、シングルスペース相当としてフォントサイズ×1.2を使う
+function getLineSpacing(pPrEl){
+  if (!pPrEl) return { mode:"pct", factor:1.2 };
+  const lnSpc = firstEl(pPrEl, A_NS, "lnSpc");
+  if (!lnSpc) return { mode:"pct", factor:1.2 };
+  const pct = firstEl(lnSpc, A_NS, "spcPct");
+  if (pct && pct.getAttribute("val")){
+    return { mode:"pct", factor: 1.2 * (parseInt(pct.getAttribute("val"),10) / 100000) };
+  }
+  const pts = firstEl(lnSpc, A_NS, "spcPts");
+  if (pts && pts.getAttribute("val")){
+    return { mode:"pts", value: parseInt(pts.getAttribute("val"),10) / 100 };
+  }
+  return { mode:"pct", factor:1.2 };
 }
 
 // 図形の位置・サイズ・回転・縦書き・ワードアート等を確認し、対応可否を判定する。
@@ -798,6 +817,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
 
     const pPrEl = firstEl(pEl, A_NS, "pPr");
     curYPt += readSpcPts(pPrEl, "spcBef");
+    const lnSpcInfo = getLineSpacing(pPrEl);
 
     const lines = computeLines(flat, meta, breaksAfter, info.wrap, availWidthPt);
     const linesWithY = [];
@@ -805,7 +825,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
       const maxSz = line.end > line.start
         ? Math.max.apply(null, meta.slice(line.start, line.end).map(m => m.sz))
         : emptyLineSz;
-      const heightPt = maxSz * LINE_SPACING;
+      const heightPt = lnSpcInfo.mode === "pts" ? lnSpcInfo.value : maxSz * lnSpcInfo.factor;
       linesWithY.push({ ...line, topPt: curYPt, heightPt });
       curYPt += heightPt;
     }
@@ -968,7 +988,7 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
   return rawXml;
 }
 
-async function processPptx(arrayBuffer, onProgress){
+async function processPptx(arrayBuffer, onProgress, onFontWarning){
   const zip = await JSZip.loadAsync(arrayBuffer);
   const { name: userFontName, size: userFontSize } = rubyFontOverrides();
   const offsetEl = document.getElementById("rubyOffset");
@@ -981,6 +1001,34 @@ async function processPptx(arrayBuffer, onProgress){
       const nb = parseInt(b.match(/slide(\d+)\.xml$/)[1], 10);
       return na - nb;
     });
+
+  // 本文で使われているフォントがこのブラウザで実際に利用可能かを簡易チェックする。
+  // (使用不可の場合、Canvasでの文字幅測定が代替フォントで行われ、行の折返し位置や
+  //  文字の横位置の推定がPowerPoint実機の表示とズレる主因となるため)
+  if (onFontWarning){
+    try{
+      const fontNames = new Set();
+      for (const slidePath of slidePaths){
+        const rawXml = await zip.file(slidePath).async("string");
+        const re = /typeface="([^"]+)"/g;
+        let m;
+        while ((m = re.exec(rawXml)) !== null){
+          if (m[1] && !m[1].startsWith("+")) fontNames.add(m[1]);
+        }
+      }
+      if (document.fonts && document.fonts.ready){
+        await document.fonts.ready;
+      }
+      const unavailable = [];
+      for (const f of fontNames){
+        try{
+          const ok = document.fonts.check(`16px "${f}"`);
+          if (!ok) unavailable.push(f);
+        } catch(e){ /* チェック不能なフォント名は無視 */ }
+      }
+      if (unavailable.length) onFontWarning(unavailable);
+    } catch(e){ console.warn("font check failed", e); }
+  }
 
   for (const slidePath of slidePaths){
     const num = slidePath.match(/slide(\d+)\.xml$/)[1];
@@ -1053,7 +1101,17 @@ generateBtn.addEventListener("click", async () => {
 
     const arrayBuffer = await selectedFile.arrayBuffer();
     const onProgress = (loc, tagHtml, contentHtml) => addPreviewRow(loc, tagHtml, contentHtml);
-    const blob = await processPptx(arrayBuffer, onProgress);
+    const onFontWarning = (fonts) => {
+      const notice = document.getElementById("previewNotice");
+      const div = document.createElement("div");
+      div.className = "notice warn";
+      div.innerHTML = "<strong>フォントの読み込みに関する注意：</strong>次のフォントがこのブラウザ上で確認できませんでした（"
+        + fonts.map(escapeHtml).join("、")
+        + "）。該当フォントを使用している図形は、実際にインストールされている代替フォントで文字幅を計算しているため、"
+        + "PowerPoint実機での折返し位置・ふりがなの位置とズレる可能性が高いです。可能であれば、生成に使うPC・ブラウザに該当フォントをインストールした上で再度お試しください。";
+      notice.appendChild(div);
+    };
+    const blob = await processPptx(arrayBuffer, onProgress, onFontWarning);
 
     const baseName = selectedFile.name.replace(/\.pptx$/i, "");
     const url = URL.createObjectURL(blob);

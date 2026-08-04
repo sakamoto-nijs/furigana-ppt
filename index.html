@@ -902,7 +902,14 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
           ? Math.max.apply(null, pd.meta.slice(line.start, line.end).map(m => m.sz))
           : pd.emptyLineSz;
         const heightPt = pd.lnSpcInfo.mode === "pts" ? pd.lnSpcInfo.value : maxSz * pd.lnSpcInfo.factor;
-        linesWithY.push({ ...line, topPt: curYPt, heightPt });
+        // 行間(lnSpc)が「シングルスペース相当」(maxSz×1.2)より広く指定されている場合、
+        // PowerPointはその超過分をこの行の"上"に余白として積む(=文字はその行の下寄りに
+        // 配置される)。これを踏まえないと、行間を広げた段落ほどふりがなが実際の文字位置
+        // より大きく上に浮いてしまう(実機スクリーンショットで確認された症状)。
+        // glyphTopPt は実際に文字が描画され始まる(と推定される)Y座標。
+        const naturalHeightPt = maxSz * 1.2;
+        const excessAbovePt = Math.max(0, heightPt - naturalHeightPt);
+        linesWithY.push({ ...line, topPt: curYPt, heightPt, glyphTopPt: curYPt + excessAbovePt });
         curYPt += heightPt;
       }
       curYPt += pd.spcAftPt;
@@ -968,7 +975,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
         const boxWidthPt = Math.max(kanjiWidthPt, rubyTextWidthPt);
         const boxXPt = kanjiStartPt - (boxWidthPt - kanjiWidthPt) / 2;
         const rubyHeightPt = rubySizePt * 1.3;
-        const boxYPt = line.topPt - rubyHeightPt - offsetPt;
+        const boxYPt = line.glyphTopPt - rubyHeightPt - offsetPt;
 
         const xEmu = info.x + boxXPt * EMU_PER_PT;
         const yEmu = info.y + boxYPt * EMU_PER_PT;

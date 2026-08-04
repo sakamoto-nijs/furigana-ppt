@@ -271,6 +271,17 @@
           </optgroup>
         </select>
       </div>
+      <div class="field">
+        <label for="rubyColor">ふりがなの文字色</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <input type="color" id="rubyColor" value="#000000" style="width:48px;height:38px;padding:2px;border:1px solid var(--line);border-radius:6px;background:#fff;flex:none;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:400;margin:0;">
+            <input type="checkbox" id="rubyColorAuto" checked style="width:auto;">
+            <span style="font-size:13px;">自動(黒)のままにする</span>
+          </label>
+        </div>
+        <div class="hint">チェックを外すと、左のカラーピッカーで選んだ色をふりがな全体に適用します。</div>
+      </div>
     </div>
     <div class="field">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -863,12 +874,22 @@ function rubyFontOverrides(){
   return { name, size };
 }
 
+// ふりがなの文字色を取得する。「自動(黒)のままにする」がオンならnull(=色指定なし=既定の黒)を返す。
+// オフの場合はカラーピッカーの値を "RRGGBB"(先頭#無し、大文字)形式で返す。
+function rubyColorOverride(){
+  const autoEl = document.getElementById("rubyColorAuto");
+  if (!autoEl || autoEl.checked) return null;
+  const colorEl = document.getElementById("rubyColor");
+  if (!colorEl || !colorEl.value) return null;
+  return colorEl.value.replace("#", "").toUpperCase();
+}
+
 function autoRubySize(mainSizePt){
   return Math.max(Math.round(mainSizePt / 2), 5);
 }
 
 // 図形1つ分のレイアウトを計算し、ふりがなボックス群のXML断片とプレビュー情報を返す
-function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts){
+function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor){
   const availWidthPt = (info.cx - info.lIns - info.rIns) / EMU_PER_PT;
   const lInsPt = info.lIns / EMU_PER_PT;
   const newShapesXml = [];
@@ -984,7 +1005,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
 
         const newId = nextIdRef.value++;
         const name = `${FURIGANA_PREFIX}|orig=${shapeId}|p=${paraIdx}|tok=${tokIdx}`;
-        newShapesXml.push(buildFuriganaShapeXml(newId, name, xEmu, yEmu, cxEmu, cyEmu, range.reading, rubySizePt, rubyFont));
+        newShapesXml.push(buildFuriganaShapeXml(newId, name, xEmu, yEmu, cxEmu, cyEmu, range.reading, rubySizePt, rubyFont, rubyColor));
         tokIdx++;
       }
       previewEntries.push({ text:flat, ranges, unresolved, skippedSpans, wrapUncertain: linesWithY.some(l => l.wrapped) });
@@ -995,13 +1016,14 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
   return { newShapesXml, previewEntries };
 }
 
-function buildFuriganaShapeXml(id, name, xEmu, yEmu, cxEmu, cyEmu, text, fontPt, fontName){
+function buildFuriganaShapeXml(id, name, xEmu, yEmu, cxEmu, cyEmu, text, fontPt, fontName, colorHex){
   const szAttr = Math.max(Math.round(fontPt * 100), 100);
+  const fillXml = colorHex ? `<a:solidFill><a:srgbClr val="${escapeXmlAttr(colorHex)}"/></a:solidFill>` : "";
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${escapeXmlAttr(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>`
     + `<p:spPr><a:xfrm><a:off x="${Math.round(xEmu)}" y="${Math.round(yEmu)}"/><a:ext cx="${Math.max(Math.round(cxEmu),1)}" cy="${Math.max(Math.round(cyEmu),1)}"/></a:xfrm>`
     + `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>`
     + `<p:txBody><a:bodyPr wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr" anchorCtr="1"><a:noAutofit/></a:bodyPr><a:lstStyle/>`
-    + `<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="ja-JP" sz="${szAttr}" dirty="0"><a:latin typeface="${escapeXmlAttr(fontName)}"/><a:ea typeface="${escapeXmlAttr(fontName)}"/></a:rPr><a:t>${escapeXmlText(text)}</a:t></a:r></a:p>`
+    + `<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="ja-JP" sz="${szAttr}" dirty="0">${fillXml}<a:latin typeface="${escapeXmlAttr(fontName)}"/><a:ea typeface="${escapeXmlAttr(fontName)}"/></a:rPr><a:t>${escapeXmlText(text)}</a:t></a:r></a:p>`
     + `</p:txBody></p:sp>`;
 }
 
@@ -1142,7 +1164,7 @@ async function buildThemeFontMap(zip, slidePaths){
   return map;
 }
 
-async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFont, userSize, onProgress, themeFonts){
+async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFont, userSize, onProgress, themeFonts, rubyColor){
   let rawXml = rawXmlIn;
   const overwrite = overwriteExistingEnabled();
   if (overwrite){
@@ -1183,7 +1205,7 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
     }
 
     const { newShapesXml, previewEntries } = layoutShapeAndBuildFurigana(
-      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts
+      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor
     );
     if (newShapesXml.length) allNewShapesXml += newShapesXml.join("");
 
@@ -1208,6 +1230,7 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
 async function processPptx(arrayBuffer, onProgress, onFontWarning){
   const zip = await JSZip.loadAsync(arrayBuffer);
   const { name: userFontName, size: userFontSize } = rubyFontOverrides();
+  const rubyColor = rubyColorOverride();
   const offsetEl = document.getElementById("rubyOffset");
   const offsetPt = offsetEl && offsetEl.value.trim() !== "" ? parseFloat(offsetEl.value.trim()) : 1;
 
@@ -1264,7 +1287,7 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
     const num = slidePath.match(/slide(\d+)\.xml$/)[1];
     const rawXml = await zip.file(slidePath).async("string");
     const newXml = await processSlideXml(
-      rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress, themeFontMap.get(slidePath)
+      rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress, themeFontMap.get(slidePath), rubyColor
     );
     if (newXml !== rawXml) zip.file(slidePath, newXml);
     await new Promise(requestAnimationFrame); // UIを固まらせない
@@ -1293,6 +1316,17 @@ fileInput.addEventListener("change", (e) => {
 });
 
 tryLoadDict();
+
+// 「自動(黒)のままにする」チェックに応じて、カラーピッカーの有効/無効を切り替える
+const rubyColorAutoEl = document.getElementById("rubyColorAuto");
+const rubyColorEl = document.getElementById("rubyColor");
+function syncRubyColorEnabled(){
+  if (rubyColorEl) rubyColorEl.disabled = !rubyColorAutoEl || rubyColorAutoEl.checked;
+}
+if (rubyColorAutoEl){
+  rubyColorAutoEl.addEventListener("change", syncRubyColorEnabled);
+  syncRubyColorEnabled();
+}
 
 function handleFile(file){
   const name = file.name.toLowerCase();

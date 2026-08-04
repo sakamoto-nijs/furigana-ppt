@@ -609,13 +609,28 @@ const measureCtx = measureCanvas.getContext("2d");
 function fontCss(m){
   return `${m.bold ? "bold " : ""}${m.italic ? "italic " : ""}${m.sz}px "${m.font}"`;
 }
-function charWidthPt(ch, m){
-  measureCtx.font = fontCss(m);
-  return measureCtx.measureText(ch).width;
+// 文字ごとの実測幅をキャッシュする(同じ文字/フォント/サイズの組み合わせに対する
+// Canvas測定を使い回す。widthScale探索で同じ文字集合を何度も評価するための高速化と、
+// スケール係数を「測定後に掛け算するだけ」にするための土台を兼ねる)。
+const charWidthCache = new Map();
+function rawCharWidthPt(ch, m){
+  const key = ch + "\u0000" + m.font + "\u0000" + m.sz + "\u0000" + (m.bold?1:0) + "\u0000" + (m.italic?1:0);
+  let w = charWidthCache.get(key);
+  if (w === undefined){
+    measureCtx.font = fontCss(m);
+    w = measureCtx.measureText(ch).width;
+    charWidthCache.set(key, w);
+  }
+  return w;
 }
-function substrWidthPt(flat, meta, start, end){
+// scale: このブラウザでの実測幅を、実機(PowerPoint)での実際の幅に近づけるための
+// 補正係数。既定は1(補正なし)。spAutoFitの高さから逆算した場合のみ1以外になる。
+function charWidthPt(ch, m, scale){
+  return rawCharWidthPt(ch, m) * (scale == null ? 1 : scale);
+}
+function substrWidthPt(flat, meta, start, end, scale){
   let w = 0;
-  for (let i=start; i<end; i++) w += charWidthPt(flat[i], meta[i]);
+  for (let i=start; i<end; i++) w += charWidthPt(flat[i], meta[i], scale);
   return w;
 }
 function textWidthPt(text, font, sz, bold){
@@ -709,6 +724,11 @@ function analyzeShape(spEl){
   const lIns = bodyPr && bodyPr.getAttribute("lIns") != null ? parseInt(bodyPr.getAttribute("lIns"),10) : 91440;
   const tIns = bodyPr && bodyPr.getAttribute("tIns") != null ? parseInt(bodyPr.getAttribute("tIns"),10) : 45720;
   const rIns = bodyPr && bodyPr.getAttribute("rIns") != null ? parseInt(bodyPr.getAttribute("rIns"),10) : 91440;
+  const bIns = bodyPr && bodyPr.getAttribute("bIns") != null ? parseInt(bodyPr.getAttribute("bIns"),10) : 45720;
+  // <a:spAutoFit/> は「PowerPoint保存時点で、この図形の高さ(cy)は実際に描画された
+  // 行数にちょうど収まるよう自動調整されていた」ことを意味する。これは実機での
+  // 本当の折返し行数を逆算するための、ファイル自身が持つ数少ない確実な手がかりになる。
+  const hasSpAutoFit = !!(bodyPr && firstEl(bodyPr, A_NS, "spAutoFit"));
 
   const paragraphs = Array.from(txBody.getElementsByTagNameNS(A_NS, "p")).filter(p => p.parentNode === txBody);
 
@@ -721,7 +741,7 @@ function analyzeShape(spEl){
     y: parseInt(off.getAttribute("y"),10),
     cx: parseInt(ext.getAttribute("cx"),10),
     cy: parseInt(ext.getAttribute("cy"),10),
-    wrap, fontScale, approxAutofit, lIns, tIns, rIns, isTitlePh, paragraphs
+    wrap, fontScale, approxAutofit, lIns, tIns, rIns, bIns, hasSpAutoFit, isTitlePh, paragraphs
   };
 }
 
@@ -807,7 +827,7 @@ function flattenFragments(fragments){
 // wrap="square" の場合、利用可能幅に基づき貪欲法で行分割をシミュレートする
 // (PowerPoint 自身の禁則処理等は再現していない概算)。wrap="none" の場合は
 // 改行(<a:br/>)以外では折り返さない。
-function computeLines(flat, meta, breaksAfter, wrap, availWidthPt){
+function computeLines(flat, meta, breaksAfter, wrap, availWidthPt, scale){
   const segments = [];
   let segStart = 0;
   const sortedBreaks = breaksAfter.slice().sort((a,b)=>a-b);
@@ -823,7 +843,7 @@ function computeLines(flat, meta, breaksAfter, wrap, availWidthPt){
     }
     let lineStart = segStart, w = 0, wrappedAny = false;
     for (let i=segStart; i<segEnd; i++){
-      const cw = charWidthPt(flat[i], meta[i]);
+      const cw = charWidthPt(flat[i], meta[i], scale);
       if (w + cw > availWidthPt && i > lineStart){
         lines.push({ start:lineStart, end:i, wrapped:true });
         lineStart = i; w = 0; wrappedAny = true;
@@ -851,30 +871,73 @@ function autoRubySize(mainSizePt){
 function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts){
   const availWidthPt = (info.cx - info.lIns - info.rIns) / EMU_PER_PT;
   const lInsPt = info.lIns / EMU_PER_PT;
-  let curYPt = info.tIns / EMU_PER_PT;
   const newShapesXml = [];
   const previewEntries = []; // {text, ranges, unresolved, skippedSpans}
 
-  let paraIdx = 0;
-  for (const pEl of info.paragraphs){
+  // 段落ごとのフラグメント・行間情報は widthScale に依存しないため、
+  // スケール探索(下記)で使い回せるよう先にまとめて計算しておく。
+  const paraData = info.paragraphs.map(pEl => {
     const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale, themeFonts, info.isTitlePh);
     const { flat, meta, breaksAfter } = flattenFragments(fragments);
-
     const pPrEl = firstEl(pEl, A_NS, "pPr");
-    curYPt += readSpcPts(pPrEl, "spcBef");
-    const lnSpcInfo = getLineSpacing(pPrEl);
+    return {
+      algn, flat, meta, breaksAfter, emptyLineSz,
+      spcBefPt: readSpcPts(pPrEl, "spcBef"),
+      spcAftPt: readSpcPts(pPrEl, "spcAft"),
+      lnSpcInfo: getLineSpacing(pPrEl)
+    };
+  });
 
-    const lines = computeLines(flat, meta, breaksAfter, info.wrap, availWidthPt);
-    const linesWithY = [];
-    for (const line of lines){
-      const maxSz = line.end > line.start
-        ? Math.max.apply(null, meta.slice(line.start, line.end).map(m => m.sz))
-        : emptyLineSz;
-      const heightPt = lnSpcInfo.mode === "pts" ? lnSpcInfo.value : maxSz * lnSpcInfo.factor;
-      linesWithY.push({ ...line, topPt: curYPt, heightPt });
-      curYPt += heightPt;
+  // 指定した幅補正係数(scale)で、図形内の全段落を上から積み上げて
+  // 行ごとのY座標と合計の高さを計算する。
+  function computeLayout(scale){
+    let curYPt = info.tIns / EMU_PER_PT;
+    const perParagraph = [];
+    for (const pd of paraData){
+      curYPt += pd.spcBefPt;
+      const lines = computeLines(pd.flat, pd.meta, pd.breaksAfter, info.wrap, availWidthPt, scale);
+      const linesWithY = [];
+      for (const line of lines){
+        const maxSz = line.end > line.start
+          ? Math.max.apply(null, pd.meta.slice(line.start, line.end).map(m => m.sz))
+          : pd.emptyLineSz;
+        const heightPt = pd.lnSpcInfo.mode === "pts" ? pd.lnSpcInfo.value : maxSz * pd.lnSpcInfo.factor;
+        linesWithY.push({ ...line, topPt: curYPt, heightPt });
+        curYPt += heightPt;
+      }
+      curYPt += pd.spcAftPt;
+      perParagraph.push(linesWithY);
     }
-    curYPt += readSpcPts(pPrEl, "spcAft");
+    return { perParagraph, totalHeightPt: curYPt };
+  }
+
+  // 幅補正係数(widthScale)の推定:
+  // <a:spAutoFit/> が付いている図形は、PowerPoint保存時点で「実際に描画された行数に
+  // ちょうど収まる高さ」に自動調整されている。これを手がかりに、このブラウザでの
+  // 文字幅測定(游ゴシック等の代替フォントによる測定)を、実機フォントでの折返しに
+  // 近づくよう校正する。テーマフォントがこのブラウザに無い場合に生じる、行の割り当て
+  // ミス(≒ふりがなが大きくずれる/無関係な行に重なる)を大幅に軽減するのが狙い。
+  let widthScale = 1;
+  if (info.hasSpAutoFit && info.wrap === "square"){
+    const targetHeightPt = (info.cy - info.tIns - info.bIns) / EMU_PER_PT;
+    const baseDiff = Math.abs(computeLayout(1).totalHeightPt - targetHeightPt);
+    let bestScale = 1, bestDiff = baseDiff;
+    for (let s = 0.55; s <= 1.601; s += 0.01){
+      const diff = Math.abs(computeLayout(s).totalHeightPt - targetHeightPt);
+      if (diff < bestDiff - 1e-6 || (Math.abs(diff - bestDiff) < 1e-6 && Math.abs(s - 1) < Math.abs(bestScale - 1))){
+        bestDiff = diff; bestScale = s;
+      }
+    }
+    // 誤差が明確に縮まる場合のみ採用する(元々ほぼ合っている図形に余計な補正をかけない)
+    if (bestDiff < baseDiff - 0.5) widthScale = bestScale;
+  }
+
+  const { perParagraph } = computeLayout(widthScale);
+
+  let paraIdx = 0;
+  for (const pd of paraData){
+    const { algn, flat, meta } = pd;
+    const linesWithY = perParagraph[paraIdx];
 
     if (containsKanji(flat)){
       const { ranges, unresolved } = getFuriganaRanges(flat, tokenizer);
@@ -887,7 +950,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
           skippedSpans.push({ sb:range.sb, eb:range.eb });
           continue;
         }
-        const lineWidthPt = substrWidthPt(flat, meta, line.start, line.end);
+        const lineWidthPt = substrWidthPt(flat, meta, line.start, line.end, widthScale);
         let startOffsetPt = 0;
         if (algn === "r") startOffsetPt = Math.max(availWidthPt - lineWidthPt, 0);
         else if (algn === "ctr") startOffsetPt = Math.max((availWidthPt - lineWidthPt) / 2, 0);
@@ -895,8 +958,8 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
         // NOTE: 図形の左インセット(lIns)を加算する。これが無いと、ふりがなボックスが
         // 図形の左インセット分(既定91440EMU=7.2pt)だけ左にずれてしまう
         // (実機テストで報告された「ふりがなの位置がずれる」不具合の主因)。
-        const kanjiStartPt = lInsPt + startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb);
-        const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb);
+        const kanjiStartPt = lInsPt + startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb, widthScale);
+        const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb, widthScale);
         const tokenMeta = meta[range.sb];
 
         const rubySizePt = userSize || autoRubySize(tokenMeta.sz);
@@ -917,7 +980,7 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
         newShapesXml.push(buildFuriganaShapeXml(newId, name, xEmu, yEmu, cxEmu, cyEmu, range.reading, rubySizePt, rubyFont));
         tokIdx++;
       }
-      previewEntries.push({ text:flat, ranges, unresolved, skippedSpans, wrapUncertain: lines.some(l => l.wrapped) });
+      previewEntries.push({ text:flat, ranges, unresolved, skippedSpans, wrapUncertain: linesWithY.some(l => l.wrapped) });
     }
     paraIdx++;
   }

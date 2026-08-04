@@ -655,6 +655,17 @@ function getLineSpacing(pPrEl){
   return { mode:"pct", factor:1.2 };
 }
 
+// プレースホルダーの種別(title/ctrTitle等)を取得する。プレースホルダーでなければ null。
+// テーマの majorFont(タイトル用) / minorFont(本文用) のどちらを暗黙フォントとして
+// 使うべきかの判定に用いる。
+function getPlaceholderType(spEl){
+  const nvSpPr = firstEl(spEl, P_NS, "nvSpPr");
+  const nvPr = nvSpPr ? firstEl(nvSpPr, P_NS, "nvPr") : null;
+  const ph = nvPr ? firstEl(nvPr, P_NS, "ph") : null;
+  if (!ph) return null;
+  return ph.getAttribute("type") || "body";
+}
+
 // 図形の位置・サイズ・回転・縦書き・ワードアート等を確認し、対応可否を判定する。
 // 対応不可の場合は null ではなく reason 文字列を返す({supported:false, reason})。
 function analyzeShape(spEl){
@@ -701,20 +712,51 @@ function analyzeShape(spEl){
 
   const paragraphs = Array.from(txBody.getElementsByTagNameNS(A_NS, "p")).filter(p => p.parentNode === txBody);
 
+  const phType = getPlaceholderType(spEl);
+  const isTitlePh = phType === "title" || phType === "ctrTitle";
+
   return {
     supported: true,
     x: parseInt(off.getAttribute("x"),10),
     y: parseInt(off.getAttribute("y"),10),
     cx: parseInt(ext.getAttribute("cx"),10),
     cy: parseInt(ext.getAttribute("cy"),10),
-    wrap, fontScale, approxAutofit, lIns, tIns, rIns, paragraphs
+    wrap, fontScale, approxAutofit, lIns, tIns, rIns, isTitlePh, paragraphs
   };
 }
 
+// rPr/endParaRPr 等に現れる typeface 値を実際のフォント名に解決する。
+// "+mj-lt"/"+mj-ea"/"+mn-lt"/"+mn-ea" はテーマの見出し/本文フォントへの参照であり、
+// 文字列そのままではフォント名として扱えないため、テーマから解決した実フォント名に変換する。
+function resolveThemeTypefaceRef(raw, themeFonts){
+  if (!raw) return null;
+  if (!themeFonts) return raw.startsWith("+") ? null : raw;
+  switch (raw){
+    case "+mj-lt": return themeFonts.majorLatin || null;
+    case "+mj-ea": return themeFonts.majorEa || null;
+    case "+mn-lt": return themeFonts.minorLatin || null;
+    case "+mn-ea": return themeFonts.minorEa || null;
+    default: return raw;
+  }
+}
+
+// rPr に明示的なフォント指定が無い場合、図形が属する段落がプレースホルダー種別的に
+// タイトル系かどうかに応じて、テーマの majorFont(見出し用) / minorFont(本文用) を
+// 暗黙のフォントとして採用する(PowerPointの実際の継承ルールに合わせる)。
+// テーマ情報が取得できない場合は、従来通りの固定フォールバック(游ゴシック)を使う。
+function implicitShapeFont(themeFonts, isTitlePh){
+  if (!themeFonts) return null;
+  const f = isTitlePh
+    ? (themeFonts.majorEa || themeFonts.majorLatin)
+    : (themeFonts.minorEa || themeFonts.minorLatin);
+  return f || null;
+}
+
 // 段落内の <a:r>(ラン) / <a:br>(改行) をフラグメント列に変換
-function paragraphFragments(pEl, fontScale){
+function paragraphFragments(pEl, fontScale, themeFonts, isTitlePh){
   const pPrEl = firstEl(pEl, A_NS, "pPr");
   const algn = pPrEl ? (pPrEl.getAttribute("algn") || "l") : "l";
+  const fallbackFont = implicitShapeFont(themeFonts, isTitlePh) || DEFAULT_FONT_NAME;
   const fragments = [];
   for (const child of Array.from(pEl.children)){
     const ln = child.localName;
@@ -728,16 +770,18 @@ function paragraphFragments(pEl, fontScale){
       sz = sz * fontScale;
       const bold = !!(rPr && rPr.getAttribute("b") === "1");
       const italic = !!(rPr && rPr.getAttribute("i") === "1");
-      let font = DEFAULT_FONT_NAME;
+      let font = null;
       if (rPr){
         const ea = firstEl(rPr, A_NS, "ea");
         const latin = firstEl(rPr, A_NS, "latin");
-        if (ea && ea.getAttribute("typeface")) font = ea.getAttribute("typeface");
-        else if (latin && latin.getAttribute("typeface")) font = latin.getAttribute("typeface");
+        const eaTf = resolveThemeTypefaceRef(ea && ea.getAttribute("typeface"), themeFonts);
+        const latinTf = resolveThemeTypefaceRef(latin && latin.getAttribute("typeface"), themeFonts);
+        font = eaTf || latinTf || null;
       }
+      if (!font) font = fallbackFont;
       fragments.push({ text, sz, font, bold, italic, isBreak:false });
     } else if (ln === "br"){
-      fragments.push({ text:"", sz:DEFAULT_FONT_SIZE_PT * fontScale, font:DEFAULT_FONT_NAME, bold:false, italic:false, isBreak:true });
+      fragments.push({ text:"", sz:DEFAULT_FONT_SIZE_PT * fontScale, font:fallbackFont, bold:false, italic:false, isBreak:true });
     }
   }
   const endParaRPr = firstEl(pEl, A_NS, "endParaRPr");
@@ -804,15 +848,16 @@ function autoRubySize(mainSizePt){
 }
 
 // 図形1つ分のレイアウトを計算し、ふりがなボックス群のXML断片とプレビュー情報を返す
-function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize){
+function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts){
   const availWidthPt = (info.cx - info.lIns - info.rIns) / EMU_PER_PT;
+  const lInsPt = info.lIns / EMU_PER_PT;
   let curYPt = info.tIns / EMU_PER_PT;
   const newShapesXml = [];
   const previewEntries = []; // {text, ranges, unresolved, skippedSpans}
 
   let paraIdx = 0;
   for (const pEl of info.paragraphs){
-    const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale);
+    const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale, themeFonts, info.isTitlePh);
     const { flat, meta, breaksAfter } = flattenFragments(fragments);
 
     const pPrEl = firstEl(pEl, A_NS, "pPr");
@@ -847,7 +892,10 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
         if (algn === "r") startOffsetPt = Math.max(availWidthPt - lineWidthPt, 0);
         else if (algn === "ctr") startOffsetPt = Math.max((availWidthPt - lineWidthPt) / 2, 0);
 
-        const kanjiStartPt = startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb);
+        // NOTE: 図形の左インセット(lIns)を加算する。これが無いと、ふりがなボックスが
+        // 図形の左インセット分(既定91440EMU=7.2pt)だけ左にずれてしまう
+        // (実機テストで報告された「ふりがなの位置がずれる」不具合の主因)。
+        const kanjiStartPt = lInsPt + startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb);
         const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb);
         const tokenMeta = meta[range.sb];
 
@@ -925,7 +973,106 @@ function maxShapeId(rawXml){
   return max;
 }
 
-async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFont, userSize, onProgress){
+/* ============================================================
+ * テーマ継承フォントの解決 (slide -> slideLayout -> slideMaster -> theme)
+ * rPr に <a:ea>/<a:latin> の明示指定が無いランは、実際にはこのテーマの
+ * majorFont(見出し用) / minorFont(本文用) で描画される。これを辿らずに
+ * 固定フォールバック("游ゴシック")で幅計測すると、実機のフォントと異なる
+ * 場合に文字幅の推定がずれる原因になる。
+ * ============================================================ */
+function resolveZipRelPath(baseDir, target){
+  if (/^https?:\/\//i.test(target)) return null; // 外部参照は非対応
+  const raw = target.startsWith("/") ? target.slice(1) : `${baseDir}/${target}`;
+  const stack = [];
+  for (const part of raw.split("/")){
+    if (part === "" || part === ".") continue;
+    if (part === ".."){ stack.pop(); continue; }
+    stack.push(part);
+  }
+  return stack.join("/");
+}
+
+// 指定パートの .rels を読み、{relId: {type, target(zip内絶対パス)}} を返す
+async function readRelsForPart(zip, partPath){
+  const slashIdx = partPath.lastIndexOf("/");
+  const dir = slashIdx === -1 ? "" : partPath.slice(0, slashIdx);
+  const fileName = slashIdx === -1 ? partPath : partPath.slice(slashIdx + 1);
+  const relsPath = `${dir}/_rels/${fileName}.rels`;
+  const relsFile = zip.file(relsPath);
+  if (!relsFile) return {};
+  const relsXml = await relsFile.async("string");
+  const map = {};
+  const re = /<Relationship\b[^>]*\/?>/g;
+  let m;
+  while ((m = re.exec(relsXml)) !== null){
+    const tag = m[0];
+    const idM = tag.match(/\bId="([^"]+)"/);
+    const typeM = tag.match(/\bType="([^"]+)"/);
+    const targetM = tag.match(/\bTarget="([^"]+)"/);
+    if (!idM || !typeM || !targetM) continue;
+    map[idM[1]] = { type: typeM[1], target: resolveZipRelPath(dir, targetM[1]) };
+  }
+  return map;
+}
+
+function findRelByTypeSuffix(relsMap, suffix){
+  for (const key of Object.keys(relsMap)){
+    if (relsMap[key].type && relsMap[key].type.endsWith(suffix)) return relsMap[key];
+  }
+  return null;
+}
+
+async function loadThemeFonts(zip, themePath, cache){
+  if (cache.has(themePath)) return cache.get(themePath);
+  const themeFile = zip.file(themePath);
+  if (!themeFile){ cache.set(themePath, null); return null; }
+  const xml = await themeFile.async("string");
+  const majorBlock = xml.match(/<a:majorFont>([\s\S]*?)<\/a:majorFont>/);
+  const minorBlock = xml.match(/<a:minorFont>([\s\S]*?)<\/a:minorFont>/);
+  function extract(block){
+    if (!block) return { ea:null, latin:null };
+    const eaM = block.match(/<a:ea\s+typeface="([^"]*)"/);
+    const latM = block.match(/<a:latin\s+typeface="([^"]*)"/);
+    return {
+      ea: eaM && eaM[1] ? eaM[1] : null,
+      latin: latM && latM[1] ? latM[1] : null
+    };
+  }
+  const major = extract(majorBlock && majorBlock[1]);
+  const minor = extract(minorBlock && minorBlock[1]);
+  const result = { majorEa:major.ea, majorLatin:major.latin, minorEa:minor.ea, minorLatin:minor.latin };
+  cache.set(themePath, result);
+  return result;
+}
+
+// スライドパス -> テーマフォント情報 のマップを構築する。
+// 経路の途中(レイアウト/マスター/テーマ)が見つからない場合は null を返し、
+// 呼び出し側は従来の固定フォールバックにそのまま倒れる。
+async function buildThemeFontMap(zip, slidePaths){
+  const map = new Map();
+  const themeCache = new Map();
+  for (const slidePath of slidePaths){
+    try{
+      const slideRels = await readRelsForPart(zip, slidePath);
+      const layoutRel = findRelByTypeSuffix(slideRels, "/slideLayout");
+      if (!layoutRel || !layoutRel.target){ map.set(slidePath, null); continue; }
+      const layoutRels = await readRelsForPart(zip, layoutRel.target);
+      const masterRel = findRelByTypeSuffix(layoutRels, "/slideMaster");
+      if (!masterRel || !masterRel.target){ map.set(slidePath, null); continue; }
+      const masterRels = await readRelsForPart(zip, masterRel.target);
+      const themeRel = findRelByTypeSuffix(masterRels, "/theme");
+      if (!themeRel || !themeRel.target){ map.set(slidePath, null); continue; }
+      const themeFonts = await loadThemeFonts(zip, themeRel.target, themeCache);
+      map.set(slidePath, themeFonts);
+    } catch(e){
+      console.warn("テーマフォントの解決に失敗:", slidePath, e);
+      map.set(slidePath, null);
+    }
+  }
+  return map;
+}
+
+async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFont, userSize, onProgress, themeFonts){
   let rawXml = rawXmlIn;
   const overwrite = overwriteExistingEnabled();
   if (overwrite){
@@ -966,7 +1113,7 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
     }
 
     const { newShapesXml, previewEntries } = layoutShapeAndBuildFurigana(
-      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize
+      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts
     );
     if (newShapesXml.length) allNewShapesXml += newShapesXml.join("");
 
@@ -1002,6 +1149,11 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
       return na - nb;
     });
 
+  // スライド -> テーマフォント(見出し/本文の実フォント)のマップを事前に構築する。
+  // rPr に明示指定が無いランはこのテーマフォントで描画されるため、位置計算・
+  // フォント警告の両方でこれを考慮する。
+  const themeFontMap = await buildThemeFontMap(zip, slidePaths);
+
   // 本文で使われているフォントがこのブラウザで実際に利用可能かを簡易チェックする。
   // (使用不可の場合、Canvasでの文字幅測定が代替フォントで行われ、行の折返し位置や
   //  文字の横位置の推定がPowerPoint実機の表示とズレる主因となるため)
@@ -1014,6 +1166,14 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
         let m;
         while ((m = re.exec(rawXml)) !== null){
           if (m[1] && !m[1].startsWith("+")) fontNames.add(m[1]);
+        }
+        // rPr に明示指定が無いランで実際に使われる、テーマ継承フォントも対象に加える
+        // (これを加えないと、テーマ経由のフォントは typeface="..." としてスライドXML中に
+        //  現れないため、チェック対象から漏れてしまう)
+        const themeFonts = themeFontMap.get(slidePath);
+        if (themeFonts){
+          [themeFonts.majorEa, themeFonts.majorLatin, themeFonts.minorEa, themeFonts.minorLatin]
+            .forEach(f => { if (f) fontNames.add(f); });
         }
       }
       if (document.fonts && document.fonts.ready){
@@ -1034,7 +1194,7 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
     const num = slidePath.match(/slide(\d+)\.xml$/)[1];
     const rawXml = await zip.file(slidePath).async("string");
     const newXml = await processSlideXml(
-      rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress
+      rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress, themeFontMap.get(slidePath)
     );
     if (newXml !== rawXml) zip.file(slidePath, newXml);
     await new Promise(requestAnimationFrame); // UIを固まらせない

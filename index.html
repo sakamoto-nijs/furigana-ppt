@@ -92,6 +92,36 @@
   }
   .hint{font-size:12px;color:var(--sub);margin-top:4px;}
 
+  .dict-row{display:flex;gap:10px;align-items:center;margin-bottom:10px;}
+  .dict-row .dict-word{flex:1;min-width:0;}
+  .dict-row .dict-reading{flex:1;min-width:0;}
+  .dict-row .dict-remove{
+    flex:none;
+    width:36px;height:36px;
+    border:1px solid var(--line);
+    background:#fff;
+    color:var(--sub);
+    border-radius:6px;
+    cursor:pointer;
+    font-size:15px;
+    line-height:1;
+  }
+  .dict-row .dict-remove:hover{background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-ink);}
+  .btn-secondary{
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    background:#fff;
+    color:var(--accent-dark);
+    border:1.5px solid var(--accent);
+    padding:9px 18px;
+    border-radius:7px;
+    font-size:13.5px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .btn-secondary:hover{background:var(--ok-bg);}
+
   .dropzone{
     border:1.5px dashed var(--line);
     border-radius:8px;
@@ -213,13 +243,6 @@
   </div>
   <style>@keyframes pulse{50%{opacity:.3;}}</style>
 
-  <div class="notice warn">
-    <strong>PPTX には Word・Excel のようなネイティブのふりがな機能がありません。</strong>
-    このツールは漢字の位置を推定し、その真上に小さな「ふりがな用テキストボックス」を新規に重ねて配置する方式です。
-    そのため Word/Excel 版と比べて位置精度に限界があります。特に、①テキストボックス幅に応じた自動折返し（推定シミュレーションのため実際とズレる場合あり）、②オートフィット（自動縮小）で縮小率が不確実な場合、③縦書き・ワードアート（テキスト効果）、④プレースホルダーの位置がレイアウト側に依存していて座標を取得できない場合、⑤回転しているテキストボックス、⑥グループ化された図形の中の文字
-    については自動配置が難しいため、下記プレビューで「要確認/スキップ」として表示し、自動では処理しません。生成後は必ず PowerPoint 上でズレがないか目視確認してください。
-  </div>
-
   <div class="section">
     <h2><span class="num">01</span>設定</h2>
     <div class="row">
@@ -292,17 +315,19 @@
         オフにすると、既にふりがなボックスが追加済みの図形はスキップし、まだ処理していない図形にのみ新規追加します(手直し済みのふりがなを保護したい場合はオフにしてください)。
       </div>
     </div>
-    <div class="field">
-      <label for="customDict">カスタム辞書(任意) — 人名や専門用語の読みを指定</label>
-      <textarea id="customDict" rows="3" placeholder="例：&#10;髙橋,たかはし&#10;認定日本語教育機関,にほんごきょういくきかん" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;font-size:13px;font-family:var(--mono);resize:vertical;"></textarea>
-      <div class="hint">
-        1行に「単語,読み」の形式で指定してください。辞書(kuromoji.js)に登録されていない人名・異体字・専門用語は自動では読みを推定できないため、ここで指定した語が優先されます。
-      </div>
-    </div>
   </div>
 
   <div class="section">
-    <h2><span class="num">02</span>ファイルをアップロード</h2>
+    <h2><span class="num">02</span>カスタム辞書</h2>
+    <div class="hint" style="margin-bottom:14px;">
+      人名や専門用語など、辞書(kuromoji.js)に登録されていない語の読みをここで指定できます。指定した語は自動解析より優先されます。入力内容はこのブラウザに自動保存され、次回開いたときも復元されます。
+    </div>
+    <div id="customDictRows"></div>
+    <button type="button" class="btn-secondary" id="addDictRowBtn">＋ 単語を追加</button>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">03</span>ファイルをアップロード</h2>
     <div class="dropzone" id="dropzone">
       <div>ここにファイルをドラッグ、またはクリックして選択</div>
       <div class="hint">.pptx (PowerPoint)</div>
@@ -312,7 +337,7 @@
   </div>
 
   <div class="section">
-    <h2><span class="num">03</span>生成</h2>
+    <h2><span class="num">04</span>生成</h2>
     <button class="btn" id="generateBtn" disabled>▶ ふりがなを付けて生成</button>
     <div class="status">
       <span class="spinner" id="spinner"></span>
@@ -321,7 +346,7 @@
   </div>
 
   <div class="section" id="previewSection" style="display:none;">
-    <h2><span class="num">04</span>付与したふりがな一覧(プレビュー)</h2>
+    <h2><span class="num">05</span>付与したふりがな一覧(プレビュー)</h2>
     <div id="previewNotice"></div>
     <div class="log">
       <table>
@@ -332,6 +357,13 @@
   </div>
 
   <footer class="note">形態素解析: kuromoji.js(IPADIC) / すべての処理はブラウザ内で完結します</footer>
+
+  <div class="notice warn">
+    <strong>PPTX には Word・Excel のようなネイティブのふりがな機能がありません。</strong>
+    このツールは漢字の位置を推定し、その真上に小さな「ふりがな用テキストボックス」を新規に重ねて配置する方式です。
+    そのため Word/Excel 版と比べて位置精度に限界があります。特に、①テキストボックス幅に応じた自動折返し（推定シミュレーションのため実際とズレる場合あり）、②オートフィット（自動縮小）で縮小率が不確実な場合、③縦書き・ワードアート（テキスト効果）、④プレースホルダーの位置がレイアウト側に依存していて座標を取得できない場合、⑤回転しているテキストボックス、⑥グループ化された図形の中の文字
+    については自動配置が難しいため、下記プレビューで「要確認/スキップ」として表示し、自動では処理しません。生成後は必ず PowerPoint 上でズレがないか目視確認してください。
+  </div>
 </div>
 
 <script>
@@ -432,17 +464,17 @@ function readingTypeSuffix(){
   return document.getElementById("rubyReadingType").value === "katakana" ? "katakana" : "hiragana";
 }
 
-// カスタム辞書: "髙橋,たかはし" のような行 (カンマ/タブ/読点/空白区切り)。
-// 長い語から優先的にマッチさせる。
+// カスタム辞書: 単語欄・読み欄の行UIから取得する。長い語から優先的にマッチさせる。
 function parseCustomDict(){
-  const raw = document.getElementById("customDict") ? document.getElementById("customDict").value : "";
   const entries = [];
-  for (const line of raw.split(/\r?\n/)){
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const parts = trimmed.split(/[,\t、]+|\s+/).filter(Boolean);
-    if (parts.length >= 2) entries.push({ term: parts[0], reading: parts[1] });
-  }
+  const rows = document.querySelectorAll("#customDictRows .dict-row");
+  rows.forEach(row => {
+    const wordEl = row.querySelector(".dict-word");
+    const readingEl = row.querySelector(".dict-reading");
+    const term = wordEl ? wordEl.value.trim() : "";
+    const reading = readingEl ? readingEl.value.trim() : "";
+    if (term && reading) entries.push({ term, reading });
+  });
   entries.sort((a,b) => b.term.length - a.term.length);
   return entries;
 }
@@ -1326,6 +1358,83 @@ function syncRubyColorEnabled(){
 if (rubyColorAutoEl){
   rubyColorAutoEl.addEventListener("change", syncRubyColorEnabled);
   syncRubyColorEnabled();
+}
+
+/* ---------------- カスタム辞書(単語/読み 行UI + localStorage自動保存) ---------------- */
+const CUSTOM_DICT_STORAGE_KEY = "furiganaPptxTool.customDict.v1";
+const customDictRowsEl = document.getElementById("customDictRows");
+const addDictRowBtn = document.getElementById("addDictRowBtn");
+
+function createDictRow(word, reading){
+  const row = document.createElement("div");
+  row.className = "dict-row";
+  row.innerHTML =
+    `<input type="text" class="dict-word" placeholder="単語(例：髙橋)">` +
+    `<input type="text" class="dict-reading" placeholder="読み(例：たかはし)">` +
+    `<button type="button" class="dict-remove" title="この行を削除" aria-label="この行を削除">✕</button>`;
+  row.querySelector(".dict-word").value = word || "";
+  row.querySelector(".dict-reading").value = reading || "";
+  return row;
+}
+
+function saveDictToStorage(){
+  try{
+    const entries = [];
+    document.querySelectorAll("#customDictRows .dict-row").forEach(row => {
+      entries.push({
+        word: row.querySelector(".dict-word").value,
+        reading: row.querySelector(".dict-reading").value
+      });
+    });
+    localStorage.setItem(CUSTOM_DICT_STORAGE_KEY, JSON.stringify(entries));
+  } catch(e){
+    console.warn("カスタム辞書の保存に失敗しました(localStorageが利用できない可能性があります):", e);
+  }
+}
+
+function loadDictFromStorage(){
+  try{
+    const raw = localStorage.getItem(CUSTOM_DICT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    return null;
+  } catch(e){
+    console.warn("カスタム辞書の読み込みに失敗しました:", e);
+    return null;
+  }
+}
+
+function renderDictRows(entries){
+  if (!customDictRowsEl) return;
+  customDictRowsEl.innerHTML = "";
+  const list = (entries && entries.length) ? entries : [{ word:"", reading:"" }];
+  for (const entry of list){
+    customDictRowsEl.appendChild(createDictRow(entry.word, entry.reading));
+  }
+}
+
+if (customDictRowsEl){
+  // 入力するたびに自動保存(単語欄・読み欄どちらでも)
+  customDictRowsEl.addEventListener("input", saveDictToStorage);
+  // ✕ボタンでその行を削除
+  customDictRowsEl.addEventListener("click", (e) => {
+    if (e.target.classList.contains("dict-remove")){
+      const row = e.target.closest(".dict-row");
+      if (row) row.remove();
+      saveDictToStorage();
+    }
+  });
+  renderDictRows(loadDictFromStorage());
+}
+
+if (addDictRowBtn){
+  addDictRowBtn.addEventListener("click", () => {
+    const row = createDictRow("", "");
+    customDictRowsEl.appendChild(row);
+    row.querySelector(".dict-word").focus();
+    saveDictToStorage();
+  });
 }
 
 function handleFile(file){

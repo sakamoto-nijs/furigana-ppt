@@ -668,13 +668,18 @@ function fontCss(m){
 // (半角カタカナのみ0.5emという例外を設ける。それ以外の全角範囲は1.0em)
 function isFullWidthChar(ch){
   const c = ch.codePointAt(0);
-  return (c >= 0x3000 && c <= 0x30FF) ||   // CJK記号・句読点、ひらがな、カタカナ
+  return (c >= 0x3000 && c <= 0x303F) ||   // CJK記号・句読点(全角の句読点・かっこ等)
          (c >= 0x4E00 && c <= 0x9FFF) ||   // CJK統合漢字
          (c >= 0x3400 && c <= 0x4DBF) ||   // CJK統合漢字拡張A
          (c >= 0xF900 && c <= 0xFAFF) ||   // CJK互換漢字
          (c >= 0x2E80 && c <= 0x2FDF) ||   // 部首
          (c >= 0xFF01 && c <= 0xFF60) ||   // 全角英数・記号
          (c >= 0xFFE0 && c <= 0xFFE6);     // 全角記号(円記号等)
+  // 注: ひらがな(U+3041-309F)・カタカナ(U+30A0-30FF)はこの確定値の対象から
+  // 意図的に除外し、Canvas実測に委ねている。漢字・全角記号はほぼ全てのフォントで
+  // 厳密に sz×1.0 だが、フォントによっては「かな」だけをプロポーショナル
+  // (1em未満)にデザインしている場合がある(実例: 「UD デジタル教科書体 NK」系列で
+  // 確認。okurigana/助詞を含む行ほど右にずれる症状として現れた)。
 }
 function isHalfWidthKana(ch){
   const c = ch.codePointAt(0);

@@ -668,18 +668,25 @@ function fontCss(m){
 // (半角カタカナのみ0.5emという例外を設ける。それ以外の全角範囲は1.0em)
 function isFullWidthChar(ch){
   const c = ch.codePointAt(0);
-  return (c >= 0x3000 && c <= 0x303F) ||   // CJK記号・句読点(全角の句読点・かっこ等)
+  return (c >= 0x3000 && c <= 0x30FF) ||   // CJK記号・句読点、ひらがな、カタカナ
          (c >= 0x4E00 && c <= 0x9FFF) ||   // CJK統合漢字
          (c >= 0x3400 && c <= 0x4DBF) ||   // CJK統合漢字拡張A
          (c >= 0xF900 && c <= 0xFAFF) ||   // CJK互換漢字
          (c >= 0x2E80 && c <= 0x2FDF) ||   // 部首
          (c >= 0xFF01 && c <= 0xFF60) ||   // 全角英数・記号
          (c >= 0xFFE0 && c <= 0xFFE6);     // 全角記号(円記号等)
-  // 注: ひらがな(U+3041-309F)・カタカナ(U+30A0-30FF)はこの確定値の対象から
-  // 意図的に除外し、Canvas実測に委ねている。漢字・全角記号はほぼ全てのフォントで
-  // 厳密に sz×1.0 だが、フォントによっては「かな」だけをプロポーショナル
-  // (1em未満)にデザインしている場合がある(実例: 「UD デジタル教科書体 NK」系列で
-  // 確認。okurigana/助詞を含む行ほど右にずれる症状として現れた)。
+  // 注: 実機検証の結果、ひらがな・カタカナは漢字と同様に sz×1.0 で概ね一致することを
+  // 確認済み(下記の全角スペース例外とは別に、幅の乱れは無かった)。
+}
+// 実機(PowerPoint)での高精度スクリーンショットを用いた実測により、
+// 「UD デジタル 教科書体」系列フォントでは全角スペース(U+3000)が通常の全角文字の
+// 約72%の幅で描画されることが判明した(4箇所の単語間スペースで33-35pxと非常に
+// 安定した実測値が得られ、通常文字の46-49pxより明確に狭い)。他の記号や漢字・
+// かなの幅そのものには有意なズレは見られなかった。このフォント特有の挙動である
+// 可能性が高いため、フォント名がこのパターンに一致する場合にのみ適用する。
+const NARROW_SPACE_RATIO = 0.72;
+function hasNarrowIdeographicSpace(fontName){
+  return /教科書体/.test(fontName || "");
 }
 function isHalfWidthKana(ch){
   const c = ch.codePointAt(0);
@@ -691,6 +698,7 @@ function isHalfWidthKana(ch){
 // スケール係数を「測定後に掛け算するだけ」にするための土台を兼ねる)。
 const charWidthCache = new Map();
 function rawCharWidthPt(ch, m){
+  if (ch === "\u3000" && hasNarrowIdeographicSpace(m.font)) return m.sz * NARROW_SPACE_RATIO;
   if (isFullWidthChar(ch)) return m.sz;         // 全角は実測せず sz×1.0 で確定
   if (isHalfWidthKana(ch)) return m.sz * 0.5;   // 半角カナは sz×0.5 で確定
   const key = ch + "\u0000" + m.font + "\u0000" + m.sz + "\u0000" + (m.bold?1:0) + "\u0000" + (m.italic?1:0);

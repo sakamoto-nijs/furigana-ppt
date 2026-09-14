@@ -307,6 +307,13 @@
       </div>
     </div>
     <div class="field">
+      <label for="slideRange">ふりがなを付けるスライド範囲(任意)</label>
+      <input type="text" id="slideRange" placeholder="例: 1,3,5-7(空欄で全スライドが対象)">
+      <div class="hint">
+        印刷範囲の指定と同じ書式です。カンマ区切りで個別指定、ハイフンで範囲指定ができます(例: 「2,4-6」で2・4・5・6ページ目)。番号はPowerPoint上でのスライド番号(表示順)です。ファイルをアップロードする前に指定できます。
+      </div>
+    </div>
+    <div class="field">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
         <input type="checkbox" id="overwriteExisting" checked style="width:auto;">
         <span>このツールで以前生成したふりがなボックスがあれば、削除して再生成する</span>
@@ -652,11 +659,35 @@ const measureCtx = measureCanvas.getContext("2d");
 function fontCss(m){
   return `${m.bold ? "bold " : ""}${m.italic ? "italic " : ""}${m.sz}px "${m.font}"`;
 }
+
+// 全角相当(漢字・ひらがな・カタカナ・全角記号等)は、フォントの実装に関わらず
+// 「emスクエア設計」でsz×1.0の送り幅を持つのがほぼ全ての日本語フォントの実装。
+// Canvas.measureText()による実測はブラウザにインストールされているフォントに依存し、
+// PowerPoint実機のフォントと一致するとは限らないため、全角文字は実測せず確定値を返す
+// ことで、この不一致に起因する誤差を根本的に排除する。
+// (半角カタカナのみ0.5emという例外を設ける。それ以外の全角範囲は1.0em)
+function isFullWidthChar(ch){
+  const c = ch.codePointAt(0);
+  return (c >= 0x3000 && c <= 0x30FF) ||   // CJK記号・句読点、ひらがな、カタカナ
+         (c >= 0x4E00 && c <= 0x9FFF) ||   // CJK統合漢字
+         (c >= 0x3400 && c <= 0x4DBF) ||   // CJK統合漢字拡張A
+         (c >= 0xF900 && c <= 0xFAFF) ||   // CJK互換漢字
+         (c >= 0x2E80 && c <= 0x2FDF) ||   // 部首
+         (c >= 0xFF01 && c <= 0xFF60) ||   // 全角英数・記号
+         (c >= 0xFFE0 && c <= 0xFFE6);     // 全角記号(円記号等)
+}
+function isHalfWidthKana(ch){
+  const c = ch.codePointAt(0);
+  return c >= 0xFF61 && c <= 0xFF9F;
+}
+
 // 文字ごとの実測幅をキャッシュする(同じ文字/フォント/サイズの組み合わせに対する
 // Canvas測定を使い回す。widthScale探索で同じ文字集合を何度も評価するための高速化と、
 // スケール係数を「測定後に掛け算するだけ」にするための土台を兼ねる)。
 const charWidthCache = new Map();
 function rawCharWidthPt(ch, m){
+  if (isFullWidthChar(ch)) return m.sz;         // 全角は実測せず sz×1.0 で確定
+  if (isHalfWidthKana(ch)) return m.sz * 0.5;   // 半角カナは sz×0.5 で確定
   const key = ch + "\u0000" + m.font + "\u0000" + m.sz + "\u0000" + (m.bold?1:0) + "\u0000" + (m.italic?1:0);
   let w = charWidthCache.get(key);
   if (w === undefined){
@@ -667,13 +698,46 @@ function rawCharWidthPt(ch, m){
   return w;
 }
 // scale: このブラウザでの実測幅を、実機(PowerPoint)での実際の幅に近づけるための
-// 補正係数。既定は1(補正なし)。spAutoFitの高さから逆算した場合のみ1以外になる。
+// 補正係数。既定は1(補正なし)。spAutoFitの高さから逆算した場合や、折返し行の
+// 右端制約による行単位の補正で1以外になる。全角文字の確定値(sz)には理論上
+// 補正は不要なはずだが、半角混在行での残差を吸収するため一律に掛けている。
+// m.spcPt(文字間隔 a:rPr/@spc)は実測とは独立な明示値のため、スケールの対象外とする。
 function charWidthPt(ch, m, scale){
-  return rawCharWidthPt(ch, m) * (scale == null ? 1 : scale);
+  return rawCharWidthPt(ch, m) * (scale == null ? 1 : scale) + (m.spcPt || 0);
 }
-function substrWidthPt(flat, meta, start, end, scale){
+
+// タブ文字(\t)は固定幅の文字ではなく、「現在の行内位置(curPt)から次のタブストップ
+// まで進む」という位置依存の挙動を持つ。空欄穴埋め形式の教材で多用されるため、
+// 通常の文字幅と同列に扱うと(特に行内で複数回使われる場合)誤差が大きく積み上がる。
+// tabStops(pt、昇順)が明示されていればそれに従い、無ければ既定間隔を繰り返す。
+// 既定間隔(DEFAULT_TAB_STOP_PT)はDrawingMLの仕様上明記されておらず、一般的な
+// 既定値(1インチ=72pt)を採用したベストエフォートの近似値である点に注意。
+const DEFAULT_TAB_STOP_PT = 72;
+function tabAdvancePt(curPt, tabStops){
+  if (tabStops && tabStops.length){
+    for (const stop of tabStops){
+      if (stop > curPt + 1e-6) return stop - curPt;
+    }
+    const interval = tabStops.length >= 2
+      ? (tabStops[tabStops.length-1] - tabStops[tabStops.length-2])
+      : DEFAULT_TAB_STOP_PT;
+    let x = tabStops[tabStops.length-1];
+    while (x <= curPt + 1e-6) x += (interval > 0 ? interval : DEFAULT_TAB_STOP_PT);
+    return x - curPt;
+  }
+  const n = Math.floor((curPt + 1e-6) / DEFAULT_TAB_STOP_PT) + 1;
+  return n * DEFAULT_TAB_STOP_PT - curPt;
+}
+
+// tabStops: 対象段落の a:tabLst(pt、昇順)。無ければ既定間隔で計算する。
+// タブは位置依存のため、開始位置(start)から順に累積計算しないと正しい値にならない
+// (substrWidthPtの呼び出し元は常にその行の先頭からの相対位置を渡す設計になっている)。
+function substrWidthPt(flat, meta, start, end, scale, tabStops){
   let w = 0;
-  for (let i=start; i<end; i++) w += charWidthPt(flat[i], meta[i], scale);
+  for (let i=start; i<end; i++){
+    if (flat[i] === "\t") w += tabAdvancePt(w, tabStops);
+    else w += charWidthPt(flat[i], meta[i], scale);
+  }
   return w;
 }
 function textWidthPt(text, font, sz, bold){
@@ -711,6 +775,22 @@ function getLineSpacing(pPrEl){
     return { mode:"pts", value: parseInt(pts.getAttribute("val"),10) / 100 };
   }
   return { mode:"pct", factor:1.2 };
+}
+
+// 段落の a:tabLst(明示的なタブストップ一覧)をpt単位・昇順で取得する。
+// 空欄穴埋め形式の教材でタブ文字による位置合わせがよく使われるため、
+// 明示指定があればそれに従い、無ければ既定間隔(タブ関連の実装、後述)にフォールバックする。
+function readTabStops(pPrEl){
+  if (!pPrEl) return [];
+  const tabLst = firstEl(pPrEl, A_NS, "tabLst");
+  if (!tabLst) return [];
+  const stops = [];
+  for (const child of Array.from(tabLst.children)){
+    if (child.localName === "tab" && child.getAttribute("pos") != null){
+      stops.push(parseInt(child.getAttribute("pos"),10) / EMU_PER_PT);
+    }
+  }
+  return stops.sort((a,b) => a - b);
 }
 
 // プレースホルダーの種別(title/ctrTitle等)を取得する。プレースホルダーでなければ null。
@@ -754,12 +834,16 @@ function analyzeShape(spEl){
   }
 
   let fontScale = 1;
+  let lnSpcReductionFactor = 0; // 0〜1。normAutofitによる行間の自動短縮率(例: 0.1 = 10%短縮)
   let approxAutofit = false;
   if (bodyPr){
     const normAutofit = firstEl(bodyPr, A_NS, "normAutofit");
     if (normAutofit && normAutofit.getAttribute("fontScale")){
       fontScale = parseInt(normAutofit.getAttribute("fontScale"), 10) / 100000;
       approxAutofit = true;
+    }
+    if (normAutofit && normAutofit.getAttribute("lnSpcReduction")){
+      lnSpcReductionFactor = parseInt(normAutofit.getAttribute("lnSpcReduction"), 10) / 100000;
     }
   }
 
@@ -777,6 +861,7 @@ function analyzeShape(spEl){
 
   const phType = getPlaceholderType(spEl);
   const isTitlePh = phType === "title" || phType === "ctrTitle";
+  const isPlaceholder = phType !== null;
 
   return {
     supported: true,
@@ -784,7 +869,7 @@ function analyzeShape(spEl){
     y: parseInt(off.getAttribute("y"),10),
     cx: parseInt(ext.getAttribute("cx"),10),
     cy: parseInt(ext.getAttribute("cy"),10),
-    wrap, fontScale, approxAutofit, lIns, tIns, rIns, bIns, hasSpAutoFit, isTitlePh, paragraphs
+    wrap, fontScale, lnSpcReductionFactor, approxAutofit, lIns, tIns, rIns, bIns, hasSpAutoFit, isTitlePh, isPlaceholder, paragraphs
   };
 }
 
@@ -815,11 +900,29 @@ function implicitShapeFont(themeFonts, isTitlePh){
   return f || null;
 }
 
+// 段落・プレースホルダー・マスター・プレゼンテーションの既定文字サイズを解決する。
+// 優先順位: ラン自身のsz(呼び出し側で別途チェック済み) > 段落のpPr/defRPr/@sz >
+// マスターのtxStyles(タイトル/本文/その他)の該当レベル > presentation.xmlのdefaultTextStyle >
+// 固定フォールバック(DEFAULT_FONT_SIZE_PT)。
+// レイアウト側のlstStyle/プレースホルダー個別上書きは対象外(頻度が低く、実装コストに見合わないため)。
+function resolveInheritedSizePt(pPrEl, sizeStyle, isTitlePh, isPlaceholder){
+  const lvl = pPrEl && pPrEl.getAttribute("lvl") != null ? parseInt(pPrEl.getAttribute("lvl"),10) : 0;
+  const pDefRPr = pPrEl ? firstEl(pPrEl, A_NS, "defRPr") : null;
+  if (pDefRPr && pDefRPr.getAttribute("sz")) return parseInt(pDefRPr.getAttribute("sz"),10) / 100;
+  if (sizeStyle){
+    const table = isTitlePh ? sizeStyle.titleLvlSz : (isPlaceholder ? sizeStyle.bodyLvlSz : sizeStyle.otherLvlSz);
+    if (table && table[lvl] != null) return table[lvl];
+    if (sizeStyle.presentationDefaultLvlSz && sizeStyle.presentationDefaultLvlSz[lvl] != null) return sizeStyle.presentationDefaultLvlSz[lvl];
+  }
+  return DEFAULT_FONT_SIZE_PT;
+}
+
 // 段落内の <a:r>(ラン) / <a:br>(改行) をフラグメント列に変換
-function paragraphFragments(pEl, fontScale, themeFonts, isTitlePh){
+function paragraphFragments(pEl, fontScale, themeFonts, isTitlePh, sizeStyle, isPlaceholder){
   const pPrEl = firstEl(pEl, A_NS, "pPr");
   const algn = pPrEl ? (pPrEl.getAttribute("algn") || "l") : "l";
   const fallbackFont = implicitShapeFont(themeFonts, isTitlePh) || DEFAULT_FONT_NAME;
+  const inheritedSzPt = resolveInheritedSizePt(pPrEl, sizeStyle, isTitlePh, isPlaceholder);
   const fragments = [];
   for (const child of Array.from(pEl.children)){
     const ln = child.localName;
@@ -828,11 +931,15 @@ function paragraphFragments(pEl, fontScale, themeFonts, isTitlePh){
       const t = firstEl(child, A_NS, "t");
       const text = t ? t.textContent : "";
       if (!text) continue;
-      let sz = DEFAULT_FONT_SIZE_PT;
+      let sz = inheritedSzPt;
       if (rPr && rPr.getAttribute("sz")) sz = parseInt(rPr.getAttribute("sz"),10) / 100;
       sz = sz * fontScale;
       const bold = !!(rPr && rPr.getAttribute("b") === "1");
       const italic = !!(rPr && rPr.getAttribute("i") === "1");
+      // a:rPr/@spc: 文字間隔(トラッキング)、1/100pt単位。1文字ごとに加算されるため、
+      // 未対応のままだと行が長いほど誤差がまっすぐ積み上がる。
+      const spcAttr = rPr && rPr.getAttribute("spc");
+      const spcPt = spcAttr ? parseInt(spcAttr, 10) / 100 : 0;
       let font = null;
       if (rPr){
         const ea = firstEl(rPr, A_NS, "ea");
@@ -842,13 +949,13 @@ function paragraphFragments(pEl, fontScale, themeFonts, isTitlePh){
         font = eaTf || latinTf || null;
       }
       if (!font) font = fallbackFont;
-      fragments.push({ text, sz, font, bold, italic, isBreak:false });
+      fragments.push({ text, sz, font, bold, italic, spcPt, isBreak:false });
     } else if (ln === "br"){
-      fragments.push({ text:"", sz:DEFAULT_FONT_SIZE_PT * fontScale, font:fallbackFont, bold:false, italic:false, isBreak:true });
+      fragments.push({ text:"", sz:inheritedSzPt * fontScale, font:fallbackFont, bold:false, italic:false, spcPt:0, isBreak:true });
     }
   }
   const endParaRPr = firstEl(pEl, A_NS, "endParaRPr");
-  let emptyLineSz = DEFAULT_FONT_SIZE_PT * fontScale;
+  let emptyLineSz = inheritedSzPt * fontScale;
   if (endParaRPr && endParaRPr.getAttribute("sz")) emptyLineSz = (parseInt(endParaRPr.getAttribute("sz"),10)/100) * fontScale;
   return { algn, fragments, emptyLineSz, pPrEl };
 }
@@ -861,7 +968,7 @@ function flattenFragments(fragments){
     if (f.isBreak){ breaksAfter.push(flat.length); continue; }
     for (const ch of f.text){
       flat += ch;
-      meta.push({ sz:f.sz, font:f.font, bold:f.bold, italic:f.italic });
+      meta.push({ sz:f.sz, font:f.font, bold:f.bold, italic:f.italic, spcPt:f.spcPt||0 });
     }
   }
   return { flat, meta, breaksAfter };
@@ -869,8 +976,9 @@ function flattenFragments(fragments){
 
 // wrap="square" の場合、利用可能幅に基づき貪欲法で行分割をシミュレートする
 // (PowerPoint 自身の禁則処理等は再現していない概算)。wrap="none" の場合は
-// 改行(<a:br/>)以外では折り返さない。
-function computeLines(flat, meta, breaksAfter, wrap, availWidthPt, scale){
+// 改行(<a:br/>)以外では折り返さない。tabStopsが与えられた場合、タブ文字は
+// 固定幅ではなく次のタブストップまでの位置依存の幅として扱う。
+function computeLines(flat, meta, breaksAfter, wrap, availWidthPt, scale, tabStops){
   const segments = [];
   let segStart = 0;
   const sortedBreaks = breaksAfter.slice().sort((a,b)=>a-b);
@@ -879,21 +987,25 @@ function computeLines(flat, meta, breaksAfter, wrap, availWidthPt, scale){
 
   const lines = [];
   for (const [segStart, segEnd] of segments){
-    if (segEnd <= segStart){ lines.push({ start:segStart, end:segEnd, wrapped:false }); continue; }
+    if (segEnd <= segStart){ lines.push({ start:segStart, end:segEnd, wrapped:false, forcedWrap:false }); continue; }
     if (wrap === "none"){
-      lines.push({ start:segStart, end:segEnd, wrapped:false });
+      lines.push({ start:segStart, end:segEnd, wrapped:false, forcedWrap:false });
       continue;
     }
     let lineStart = segStart, w = 0, wrappedAny = false;
     for (let i=segStart; i<segEnd; i++){
-      const cw = charWidthPt(flat[i], meta[i], scale);
+      let cw = flat[i] === "\t" ? tabAdvancePt(w, tabStops) : charWidthPt(flat[i], meta[i], scale);
       if (w + cw > availWidthPt && i > lineStart){
-        lines.push({ start:lineStart, end:i, wrapped:true });
+        // forcedWrap: この行は幅超過によって強制的に区切られた行(=段落内で次の行が続く)。
+        // 折返し行の右端制約による補正(lineScale)は、この印が付いた行にのみ適用する。
+        lines.push({ start:lineStart, end:i, wrapped:true, forcedWrap:true });
         lineStart = i; w = 0; wrappedAny = true;
+        // タブは位置依存の幅を持つため、新しい行の先頭(w=0)基準で幅を取り直す
+        if (flat[i] === "\t") cw = tabAdvancePt(w, tabStops);
       }
       w += cw;
     }
-    lines.push({ start:lineStart, end:segEnd, wrapped:wrappedAny });
+    lines.push({ start:lineStart, end:segEnd, wrapped:wrappedAny, forcedWrap:false });
   }
   return lines;
 }
@@ -921,7 +1033,7 @@ function autoRubySize(mainSizePt){
 }
 
 // 図形1つ分のレイアウトを計算し、ふりがなボックス群のXML断片とプレビュー情報を返す
-function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor){
+function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor, sizeStyle){
   const availWidthPt = (info.cx - info.lIns - info.rIns) / EMU_PER_PT;
   const lInsPt = info.lIns / EMU_PER_PT;
   const newShapesXml = [];
@@ -930,14 +1042,15 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
   // 段落ごとのフラグメント・行間情報は widthScale に依存しないため、
   // スケール探索(下記)で使い回せるよう先にまとめて計算しておく。
   const paraData = info.paragraphs.map(pEl => {
-    const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale, themeFonts, info.isTitlePh);
+    const { algn, fragments, emptyLineSz } = paragraphFragments(pEl, info.fontScale, themeFonts, info.isTitlePh, sizeStyle, info.isPlaceholder);
     const { flat, meta, breaksAfter } = flattenFragments(fragments);
     const pPrEl = firstEl(pEl, A_NS, "pPr");
     return {
       algn, flat, meta, breaksAfter, emptyLineSz,
       spcBefPt: readSpcPts(pPrEl, "spcBef"),
       spcAftPt: readSpcPts(pPrEl, "spcAft"),
-      lnSpcInfo: getLineSpacing(pPrEl)
+      lnSpcInfo: getLineSpacing(pPrEl),
+      tabStops: readTabStops(pPrEl)
     };
   });
 
@@ -948,13 +1061,17 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
     const perParagraph = [];
     for (const pd of paraData){
       curYPt += pd.spcBefPt;
-      const lines = computeLines(pd.flat, pd.meta, pd.breaksAfter, info.wrap, availWidthPt, scale);
+      const lines = computeLines(pd.flat, pd.meta, pd.breaksAfter, info.wrap, availWidthPt, scale, pd.tabStops);
       const linesWithY = [];
       for (const line of lines){
         const maxSz = line.end > line.start
           ? Math.max.apply(null, pd.meta.slice(line.start, line.end).map(m => m.sz))
           : pd.emptyLineSz;
-        const heightPt = pd.lnSpcInfo.mode === "pts" ? pd.lnSpcInfo.value : maxSz * pd.lnSpcInfo.factor;
+        // normAutofitのlnSpcReductionを反映する(オートフィットは文字サイズだけでなく
+        // 行間も同時に短縮することがあり、これを無視すると行送りの推定がずれる)。
+        const heightPt = pd.lnSpcInfo.mode === "pts"
+          ? pd.lnSpcInfo.value
+          : maxSz * pd.lnSpcInfo.factor * (1 - info.lnSpcReductionFactor);
         // 行間(lnSpc)が「シングルスペース相当」(maxSz×1.2)より広く指定されている場合、
         // PowerPointはその超過分をこの行の"上"に余白として積む(=文字はその行の下寄りに
         // 配置される)。これを踏まえないと、行間を広げた段落ほどふりがなが実際の文字位置
@@ -994,6 +1111,31 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
 
   const { perParagraph } = computeLayout(widthScale);
 
+  // 折返し行(段落の最終行以外)は、定義上かならず
+  //   availWidth - (次の1文字の幅) < 行の実幅 ≤ availWidth
+  // の範囲に収まっているはず、という制約を使い、その行だけをローカルに伸縮させる
+  // 補正(lineScale)を追加する。widthScaleが図形全体に対する一律の補正であるのに対し、
+  // lineScaleはその行1本だけに残る誤差を打ち消す。行が長いほど強く効くため、
+  // 「文字量が多い行ほどズレが目立つ」という症状と相性が良い。
+  // (widthScale自体は既に適用した上での残差を対象にするため widthScale と掛け合わせる)
+  for (let pi = 0; pi < perParagraph.length; pi++){
+    const pd = paraData[pi];
+    for (const line of perParagraph[pi]){
+      line.lineScale = 1;
+      if (!line.forcedWrap || line.end <= line.start) continue;
+      const measuredPt = substrWidthPt(pd.flat, pd.meta, line.start, line.end, widthScale, pd.tabStops);
+      if (measuredPt <= 0) continue;
+      const maxSzInLine = Math.max.apply(null, pd.meta.slice(line.start, line.end).map(m => m.sz));
+      const lowerBound = availWidthPt - maxSzInLine;
+      if (measuredPt > availWidthPt || measuredPt < lowerBound){
+        const target = availWidthPt - maxSzInLine * 0.5; // 許容帯の中央付近を狙う
+        let ls = target / measuredPt;
+        ls = Math.min(1.1, Math.max(0.9, ls)); // 暴走防止のクランプ
+        line.lineScale = ls;
+      }
+    }
+  }
+
   let paraIdx = 0;
   for (const pd of paraData){
     const { algn, flat, meta } = pd;
@@ -1010,7 +1152,8 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
           skippedSpans.push({ sb:range.sb, eb:range.eb });
           continue;
         }
-        const lineWidthPt = substrWidthPt(flat, meta, line.start, line.end, widthScale);
+        const effScale = widthScale * (line.lineScale || 1);
+        const lineWidthPt = substrWidthPt(flat, meta, line.start, line.end, effScale, pd.tabStops);
         let startOffsetPt = 0;
         if (algn === "r") startOffsetPt = Math.max(availWidthPt - lineWidthPt, 0);
         else if (algn === "ctr") startOffsetPt = Math.max((availWidthPt - lineWidthPt) / 2, 0);
@@ -1018,8 +1161,8 @@ function layoutShapeAndBuildFurigana(info, shapeId, nextIdRef, tokenizer, offset
         // NOTE: 図形の左インセット(lIns)を加算する。これが無いと、ふりがなボックスが
         // 図形の左インセット分(既定91440EMU=7.2pt)だけ左にずれてしまう
         // (実機テストで報告された「ふりがなの位置がずれる」不具合の主因)。
-        const kanjiStartPt = lInsPt + startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb, widthScale);
-        const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb, widthScale);
+        const kanjiStartPt = lInsPt + startOffsetPt + substrWidthPt(flat, meta, line.start, range.sb, effScale, pd.tabStops);
+        const kanjiWidthPt = substrWidthPt(flat, meta, range.sb, range.eb, effScale, pd.tabStops);
         const tokenMeta = meta[range.sb];
 
         const rubySizePt = userSize || autoRubySize(tokenMeta.sz);
@@ -1169,12 +1312,60 @@ async function loadThemeFonts(zip, themePath, cache){
   return result;
 }
 
-// スライドパス -> テーマフォント情報 のマップを構築する。
+// <p:titleStyle>/<p:bodyStyle>/<p:otherStyle>/<p:defaultTextStyle> のいずれかから、
+// lvl1〜lvl9 それぞれの a:defRPr/@sz を抽出する(0番目はlvl1、以下同様の1オフセット配列)。
+// 見つからないレベルは null のままにし、呼び出し側で上位レベル/固定値へフォールバックする。
+function extractLvlSizesFromXml(xml, blockTagName){
+  const blockRe = new RegExp(`<p:${blockTagName}>([\\s\\S]*?)</p:${blockTagName}>`);
+  const m = xml.match(blockRe);
+  const sizes = [];
+  if (!m){
+    for (let i=0;i<9;i++) sizes.push(null);
+    return sizes;
+  }
+  const block = m[1];
+  for (let lvl = 1; lvl <= 9; lvl++){
+    const lvlRe = new RegExp(`<a:lvl${lvl}pPr\\b[^>]*>([\\s\\S]*?)</a:lvl${lvl}pPr>`);
+    const lvlM = block.match(lvlRe);
+    if (!lvlM){ sizes.push(null); continue; }
+    const defRPrM = lvlM[1].match(/<a:defRPr\b[^>]*\bsz="(\d+)"/);
+    sizes.push(defRPrM ? parseInt(defRPrM[1],10)/100 : null);
+  }
+  return sizes;
+}
+
+async function loadMasterSizeStyles(zip, masterPath, cache){
+  if (cache.has(masterPath)) return cache.get(masterPath);
+  const masterFile = zip.file(masterPath);
+  if (!masterFile){ cache.set(masterPath, null); return null; }
+  const xml = await masterFile.async("string");
+  const result = {
+    titleLvlSz: extractLvlSizesFromXml(xml, "titleStyle"),
+    bodyLvlSz: extractLvlSizesFromXml(xml, "bodyStyle"),
+    otherLvlSz: extractLvlSizesFromXml(xml, "otherStyle")
+  };
+  cache.set(masterPath, result);
+  return result;
+}
+
+let presentationDefaultLvlSzCache = null;
+async function getPresentationDefaultLvlSizes(zip){
+  if (presentationDefaultLvlSzCache) return presentationDefaultLvlSzCache;
+  const f = zip.file("ppt/presentation.xml");
+  if (!f){ presentationDefaultLvlSzCache = []; return presentationDefaultLvlSzCache; }
+  const xml = await f.async("string");
+  presentationDefaultLvlSzCache = extractLvlSizesFromXml(xml, "defaultTextStyle");
+  return presentationDefaultLvlSzCache;
+}
+
+// スライドパス -> {テーマフォント情報, サイズ継承テーブル} のマップを構築する。
 // 経路の途中(レイアウト/マスター/テーマ)が見つからない場合は null を返し、
 // 呼び出し側は従来の固定フォールバックにそのまま倒れる。
 async function buildThemeFontMap(zip, slidePaths){
   const map = new Map();
   const themeCache = new Map();
+  const masterSizeCache = new Map();
+  const presentationDefaultLvlSz = await getPresentationDefaultLvlSizes(zip);
   for (const slidePath of slidePaths){
     try{
       const slideRels = await readRelsForPart(zip, slidePath);
@@ -1185,11 +1376,11 @@ async function buildThemeFontMap(zip, slidePaths){
       if (!masterRel || !masterRel.target){ map.set(slidePath, null); continue; }
       const masterRels = await readRelsForPart(zip, masterRel.target);
       const themeRel = findRelByTypeSuffix(masterRels, "/theme");
-      if (!themeRel || !themeRel.target){ map.set(slidePath, null); continue; }
-      const themeFonts = await loadThemeFonts(zip, themeRel.target, themeCache);
-      map.set(slidePath, themeFonts);
+      const themeFonts = themeRel && themeRel.target ? await loadThemeFonts(zip, themeRel.target, themeCache) : null;
+      const sizeStyles = await loadMasterSizeStyles(zip, masterRel.target, masterSizeCache);
+      map.set(slidePath, Object.assign({}, themeFonts, sizeStyles, { presentationDefaultLvlSz }));
     } catch(e){
-      console.warn("テーマフォントの解決に失敗:", slidePath, e);
+      console.warn("テーマ/サイズ継承情報の解決に失敗:", slidePath, e);
       map.set(slidePath, null);
     }
   }
@@ -1237,7 +1428,7 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
     }
 
     const { newShapesXml, previewEntries } = layoutShapeAndBuildFurigana(
-      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor
+      info, shapeId, nextIdRef, tokenizer, offsetPt, userFont, userSize, themeFonts, rubyColor, themeFonts
     );
     if (newShapesXml.length) allNewShapesXml += newShapesXml.join("");
 
@@ -1259,6 +1450,51 @@ async function processSlideXml(rawXmlIn, slideLabel, tokenizer, offsetPt, userFo
   return rawXml;
 }
 
+// 印刷範囲と同じ書式(例: "1,3,5-7")でスライド番号を指定するパーサー。
+// 空欄・未入力の場合は null(=全スライド対象)を返す。数値はプレゼンテーションの
+// 表示順(1始まり、PowerPoint上で見えるスライド番号)を指す。
+function parseSlideRange(rangeStr){
+  const trimmed = (rangeStr || "").trim();
+  if (!trimmed) return null;
+  const result = new Set();
+  for (const part of trimmed.split(",")){
+    const p = part.trim();
+    if (!p) continue;
+    const rangeMatch = p.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch){
+      let a = parseInt(rangeMatch[1],10), b = parseInt(rangeMatch[2],10);
+      if (a > b){ const t=a; a=b; b=t; }
+      for (let n=a; n<=b; n++) result.add(n);
+    } else if (/^\d+$/.test(p)){
+      result.add(parseInt(p,10));
+    }
+    // それ以外の不正な断片は無視する(エラーにはしない)
+  }
+  return result.size ? result : null;
+}
+
+// presentation.xml の <p:sldIdLst> を辿って、スライドの実際の表示順(ファイル名の
+// 連番とは必ずしも一致しない。並べ替えてもファイル名までは振り直されないため)に
+// パスを並べた配列を返す。取得できない場合は null(呼び出し側でファイル名基準に
+// フォールバックする)。
+async function getSlideVisualOrder(zip){
+  const presFile = zip.file("ppt/presentation.xml");
+  if (!presFile) return null;
+  const presXml = await presFile.async("string");
+  const relIds = [];
+  const re = /<p:sldId\b[^>]*\br:id="([^"]+)"/g;
+  let m;
+  while ((m = re.exec(presXml)) !== null) relIds.push(m[1]);
+  if (!relIds.length) return null;
+  const relsMap = await readRelsForPart(zip, "ppt/presentation.xml");
+  const orderedPaths = [];
+  for (const rid of relIds){
+    const rel = relsMap[rid];
+    if (rel && rel.target) orderedPaths.push(rel.target);
+  }
+  return orderedPaths.length ? orderedPaths : null;
+}
+
 async function processPptx(arrayBuffer, onProgress, onFontWarning){
   const zip = await JSZip.loadAsync(arrayBuffer);
   const { name: userFontName, size: userFontSize } = rubyFontOverrides();
@@ -1266,18 +1502,35 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
   const offsetEl = document.getElementById("rubyOffset");
   const offsetPt = offsetEl && offsetEl.value.trim() !== "" ? parseFloat(offsetEl.value.trim()) : 1;
 
-  const slidePaths = Object.keys(zip.files)
+  const fallbackPaths = Object.keys(zip.files)
     .filter(f => /^ppt\/slides\/slide\d+\.xml$/.test(f))
     .sort((a,b) => {
       const na = parseInt(a.match(/slide(\d+)\.xml$/)[1], 10);
       const nb = parseInt(b.match(/slide(\d+)\.xml$/)[1], 10);
       return na - nb;
     });
+  // 表示順(=PowerPoint上でのスライド番号に対応)。sldIdLstから取得できない場合は
+  // ファイル名の連番から推測したものにフォールバックする。
+  const visualOrderPaths = (await getSlideVisualOrder(zip)) || fallbackPaths;
 
-  // スライド -> テーマフォント(見出し/本文の実フォント)のマップを事前に構築する。
-  // rPr に明示指定が無いランはこのテーマフォントで描画されるため、位置計算・
-  // フォント警告の両方でこれを考慮する。
-  const themeFontMap = await buildThemeFontMap(zip, slidePaths);
+  // スライド範囲の指定(印刷範囲と同じ書式)。アップロード前から入力できるフィールド。
+  const rangeEl = document.getElementById("slideRange");
+  const rangeSet = parseSlideRange(rangeEl ? rangeEl.value : "");
+  const targetPaths = rangeSet
+    ? visualOrderPaths.filter((_, idx) => rangeSet.has(idx + 1))
+    : visualOrderPaths;
+
+  if (rangeSet && targetPaths.length === 0){
+    throw new Error(`指定されたスライド範囲(${rangeEl.value})に該当するスライドがありません(このファイルの総スライド数: ${visualOrderPaths.length})。範囲の指定をご確認ください。`);
+  }
+
+  // 進捗表示用: パス -> 表示順の番号(PowerPoint上のスライド番号と一致する)
+  const slideNumByPath = new Map();
+  visualOrderPaths.forEach((p, idx) => slideNumByPath.set(p, idx + 1));
+
+  // スライド -> テーマフォント(見出し/本文の実フォント)・サイズ継承テーブルのマップを
+  // 処理対象スライドのみ事前に構築する。
+  const themeFontMap = await buildThemeFontMap(zip, targetPaths);
 
   // 本文で使われているフォントがこのブラウザで実際に利用可能かを簡易チェックする。
   // (使用不可の場合、Canvasでの文字幅測定が代替フォントで行われ、行の折返し位置や
@@ -1285,7 +1538,7 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
   if (onFontWarning){
     try{
       const fontNames = new Set();
-      for (const slidePath of slidePaths){
+      for (const slidePath of targetPaths){
         const rawXml = await zip.file(slidePath).async("string");
         const re = /typeface="([^"]+)"/g;
         let m;
@@ -1315,8 +1568,8 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
     } catch(e){ console.warn("font check failed", e); }
   }
 
-  for (const slidePath of slidePaths){
-    const num = slidePath.match(/slide(\d+)\.xml$/)[1];
+  for (const slidePath of targetPaths){
+    const num = slideNumByPath.get(slidePath) || "?";
     const rawXml = await zip.file(slidePath).async("string");
     const newXml = await processSlideXml(
       rawXml, `スライド${num}`, tokenizer, offsetPt, userFontName, userFontSize, onProgress, themeFontMap.get(slidePath), rubyColor

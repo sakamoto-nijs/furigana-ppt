@@ -286,6 +286,7 @@
             <option value="BIZ UD明朝">BIZ UD明朝</option>
             <option value="BIZ UDP明朝">BIZ UDP明朝</option>
             <option value="UD デジタル 教科書体 NK-R">UD デジタル 教科書体 NK-R</option>
+            <option value="UD デジタル 教科書体 NK-B">UD デジタル 教科書体 NK-B</option>
           </optgroup>
           <optgroup label="Mac標準">
             <option value="ヒラギノ角ゴ ProN">ヒラギノ角ゴ ProN</option>
@@ -325,7 +326,20 @@
   </div>
 
   <div class="section">
-    <h2><span class="num">02</span>カスタム辞書</h2>
+    <h2><span class="num">02</span>フォントファイルの読み込み(任意)</h2>
+    <div class="hint" style="margin-bottom:14px;">
+      本文で使われているフォントの実物ファイル(.ttf/.otf/.ttc/.woff/.woff2)をお持ちの場合、読み込ませることで文字幅の推定精度が上がります(全角文字の幅などを推測に頼らず、実際のフォントで直接測定できるようになります)。ファイル名は問いません(中身から自動でフォント名を判別します)。.ttcファイル(複数書体が1つにまとまった形式。游ゴシック/MS ゴシック等のWindows標準フォントはほぼこの形式です)は中身の書体をすべて自動的に分割して読み込みます。何十個でもまとめて選択できます。この処理はブラウザ内で完結し、フォント自体はファイルに一切保存・同梱されません。
+    </div>
+    <div class="dropzone" id="fontDropzone">
+      <div>ここにフォントファイルをドラッグ、またはクリックして選択(複数可)</div>
+      <div class="hint">.ttf / .otf / .ttc / .woff / .woff2</div>
+    </div>
+    <input type="file" id="fontFilesInput" accept=".ttf,.otf,.ttc,.woff,.woff2" multiple>
+    <div id="fontLoadStatus" class="hint" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="section">
+    <h2><span class="num">03</span>カスタム辞書</h2>
     <div class="hint" style="margin-bottom:14px;">
       人名や専門用語など、辞書(kuromoji.js)に登録されていない語の読みをここで指定できます。指定した語は自動解析より優先されます。入力内容はこのブラウザに自動保存され、次回開いたときも復元されます。
     </div>
@@ -334,7 +348,7 @@
   </div>
 
   <div class="section">
-    <h2><span class="num">03</span>ファイルをアップロード</h2>
+    <h2><span class="num">04</span>ファイルをアップロード</h2>
     <div class="dropzone" id="dropzone">
       <div>ここにファイルをドラッグ、またはクリックして選択</div>
       <div class="hint">.pptx (PowerPoint)</div>
@@ -344,7 +358,7 @@
   </div>
 
   <div class="section">
-    <h2><span class="num">04</span>生成</h2>
+    <h2><span class="num">05</span>生成</h2>
     <button class="btn" id="generateBtn" disabled>▶ ふりがなを付けて生成</button>
     <div class="status">
       <span class="spinner" id="spinner"></span>
@@ -353,7 +367,7 @@
   </div>
 
   <div class="section" id="previewSection" style="display:none;">
-    <h2><span class="num">05</span>付与したふりがな一覧(プレビュー)</h2>
+    <h2><span class="num">06</span>付与したふりがな一覧(プレビュー)</h2>
     <div id="previewNotice"></div>
     <div class="log">
       <table>
@@ -666,6 +680,8 @@ function fontCss(m){
 // PowerPoint実機のフォントと一致するとは限らないため、全角文字は実測せず確定値を返す
 // ことで、この不一致に起因する誤差を根本的に排除する。
 // (半角カタカナのみ0.5emという例外を設ける。それ以外の全角範囲は1.0em)
+// これは「実測データが無いフォント」向けの既定値であり、下記 FONT_METRICS_TABLE に
+// 実測データがあるフォントはそちらが優先される。
 function isFullWidthChar(ch){
   const c = ch.codePointAt(0);
   return (c >= 0x3000 && c <= 0x30FF) ||   // CJK記号・句読点、ひらがな、カタカナ
@@ -675,32 +691,46 @@ function isFullWidthChar(ch){
          (c >= 0x2E80 && c <= 0x2FDF) ||   // 部首
          (c >= 0xFF01 && c <= 0xFF60) ||   // 全角英数・記号
          (c >= 0xFFE0 && c <= 0xFFE6);     // 全角記号(円記号等)
-  // 注: 実機検証の結果、ひらがな・カタカナは漢字と同様に sz×1.0 で概ね一致することを
-  // 確認済み(下記の全角スペース例外とは別に、幅の乱れは無かった)。
-}
-// 実機(PowerPoint)での高精度スクリーンショットを用いた実測により、
-// 「UD デジタル 教科書体」系列フォントでは全角スペース(U+3000)が通常の全角文字の
-// 約72%の幅で描画されることが判明した(4箇所の単語間スペースで33-35pxと非常に
-// 安定した実測値が得られ、通常文字の46-49pxより明確に狭い)。他の記号や漢字・
-// かなの幅そのものには有意なズレは見られなかった。このフォント特有の挙動である
-// 可能性が高いため、フォント名がこのパターンに一致する場合にのみ適用する。
-const NARROW_SPACE_RATIO = 0.72;
-function hasNarrowIdeographicSpace(fontName){
-  return /教科書体/.test(fontName || "");
 }
 function isHalfWidthKana(ch){
   const c = ch.codePointAt(0);
   return c >= 0xFF61 && c <= 0xFF9F;
 }
 
+// 実際のWindows/Office標準フォントファイルをfontTools(Python)で解析し、
+// 直接測定した文字幅データ(全角=1.0を基準とした比率、sz×この値が実際の送り幅)。
+// 1.0からズレる文字のみ格納している(大部分の文字は1.0のままのため)。
+// 「MS Pゴシック」「BIZ UDPゴシック」等の"P"系はかなをプロポーショナルに、
+// 「UD デジタル 教科書体 NK」系は全角スペース・かなの両方をプロポーショナルに
+// デザインしていることが実測で判明した(過去の「全角スペース72%」という推測値は
+// このデータにより実測値(NK-Rは50%、NK-Bは56%)に置き換わっている)。
+const FONT_METRICS_TABLE = {
+  "MS Pゴシック": {"\u3000":0.664,"\u3001":0.664,"\u3002":0.664,"\u3008":0.5,"\u3009":0.5,"\u300a":0.5,"\u300b":0.5,"\u300c":0.5,"\u300d":0.5,"\u300e":0.5,"\u300f":0.5,"\u3010":0.5,"\u3011":0.5,"\u3014":0.5,"\u3015":0.5,"\u3041":0.746,"\u3042":0.941,"\u3043":0.805,"\u3044":0.945,"\u3045":0.602,"\u3046":0.707,"\u3047":0.75,"\u3048":0.902,"\u3049":0.805,"\u304a":0.945,"\u304d":0.844,"\u304e":0.902,"\u304f":0.59,"\u3050":0.816,"\u3051":0.945,"\u3052":0.98,"\u3053":0.797,"\u3054":0.895,"\u3055":0.766,"\u3056":0.883,"\u3057":0.766,"\u3058":0.766,"\u3059":0.961,"\u305a":0.98,"\u305d":0.922,"\u305e":0.961,"\u305f":0.922,"\u3060":0.922,"\u3061":0.863,"\u3062":0.902,"\u3063":0.805,"\u3064":0.953,"\u3065":0.957,"\u3066":0.902,"\u3067":0.902,"\u3068":0.766,"\u3069":0.883,"\u306a":0.902,"\u306b":0.941,"\u3072":0.961,"\u3073":0.961,"\u3074":0.961,"\u307e":0.891,"\u3080":0.98,"\u3081":0.98,"\u3082":0.805,"\u3083":0.844,"\u3085":0.844,"\u3086":0.98,"\u3087":0.727,"\u3088":0.863,"\u3089":0.805,"\u308a":0.746,"\u308b":0.863,"\u308d":0.844,"\u308e":0.863,"\u3092":0.855,"\u3093":0.961,"\u3094":0.824,"\u3095":0.824,"\u3096":0.824,"\u30a1":0.758,"\u30a2":0.898,"\u30a3":0.652,"\u30a4":0.824,"\u30a5":0.754,"\u30a6":0.941,"\u30a7":0.742,"\u30a8":0.895,"\u30a9":0.809,"\u30aa":0.934,"\u30ab":0.824,"\u30ac":0.922,"\u30ad":0.961,"\u30ae":0.965,"\u30af":0.805,"\u30b0":0.941,"\u30b1":0.93,"\u30b2":0.961,"\u30b3":0.797,"\u30b4":0.891,"\u30b7":0.898,"\u30b8":0.898,"\u30b9":0.902,"\u30ba":0.965,"\u30bb":0.914,"\u30bc":0.98,"\u30bd":0.805,"\u30be":0.883,"\u30bf":0.766,"\u30c0":0.922,"\u30c1":0.91,"\u30c2":0.961,"\u30c3":0.734,"\u30c4":0.863,"\u30c5":0.922,"\u30c6":0.887,"\u30c7":0.961,"\u30c8":0.648,"\u30c9":0.707,"\u30ca":0.941,"\u30cb":0.91,"\u30cc":0.824,"\u30cd":0.93,"\u30ce":0.707,"\u30d2":0.766,"\u30d3":0.863,"\u30d4":0.863,"\u30d5":0.805,"\u30d6":0.883,"\u30d7":0.883,"\u30d8":0.945,"\u30d9":0.945,"\u30da":0.945,"\u30db":0.922,"\u30dc":0.953,"\u30dd":0.953,"\u30de":0.902,"\u30df":0.668,"\u30e0":0.977,"\u30e1":0.719,"\u30e2":0.898,"\u30e3":0.805,"\u30e4":0.98,"\u30e5":0.812,"\u30e6":0.961,"\u30e7":0.629,"\u30e8":0.727,"\u30e9":0.809,"\u30ea":0.746,"\u30ec":0.852,"\u30ed":0.863,"\u30ee":0.766,"\u30ef":0.941,"\u30f2":0.805,"\u30f3":0.863,"\u30f4":0.961,"\u30f5":0.727,"\u30f6":0.777,"\u30f7":0.91,"\u30f8":0.961,"\u30f9":0.965,"\u30fa":0.922,"\u30fc":0.961},
+  "MS P明朝": {"\u3000":0.664,"\u3001":0.664,"\u3002":0.664,"\u3008":0.5,"\u3009":0.5,"\u300a":0.5,"\u300b":0.5,"\u300c":0.5,"\u300d":0.5,"\u300e":0.5,"\u300f":0.5,"\u3010":0.5,"\u3011":0.5,"\u3014":0.5,"\u3015":0.5,"\u3041":0.754,"\u3042":0.883,"\u3043":0.75,"\u3044":0.953,"\u3045":0.508,"\u3046":0.617,"\u3047":0.703,"\u3048":0.898,"\u3049":0.801,"\u304b":0.945,"\u304c":0.949,"\u304d":0.793,"\u304e":0.895,"\u304f":0.645,"\u3050":0.805,"\u3051":0.914,"\u3052":0.98,"\u3053":0.754,"\u3054":0.867,"\u3055":0.754,"\u3056":0.883,"\u3057":0.777,"\u3058":0.777,"\u305d":0.922,"\u305e":0.961,"\u305f":0.906,"\u3060":0.949,"\u3061":0.902,"\u3062":0.902,"\u3063":0.855,"\u3066":0.902,"\u3067":0.941,"\u3068":0.703,"\u3069":0.844,"\u306a":0.902,"\u306b":0.949,"\u306e":0.949,"\u306f":0.969,"\u307b":0.945,"\u307c":0.98,"\u307d":0.98,"\u307e":0.824,"\u3081":0.953,"\u3082":0.758,"\u3083":0.875,"\u3085":0.836,"\u3086":0.934,"\u3087":0.688,"\u3088":0.785,"\u3089":0.766,"\u308a":0.641,"\u308b":0.793,"\u308c":0.984,"\u308d":0.863,"\u308e":0.801,"\u308f":0.953,"\u3090":0.945,"\u3091":0.984,"\u3092":0.855,"\u3093":0.945,"\u3094":0.715,"\u3095":0.855,"\u3096":0.824,"\u30a1":0.75,"\u30a2":0.891,"\u30a3":0.668,"\u30a4":0.777,"\u30a5":0.707,"\u30a6":0.801,"\u30a7":0.805,"\u30a8":0.941,"\u30a9":0.809,"\u30aa":0.941,"\u30ab":0.879,"\u30ac":0.926,"\u30ad":0.887,"\u30ae":0.902,"\u30af":0.746,"\u30b0":0.883,"\u30b1":0.883,"\u30b2":0.934,"\u30b3":0.793,"\u30b4":0.863,"\u30b5":0.953,"\u30b6":0.961,"\u30b7":0.902,"\u30b8":0.902,"\u30b9":0.82,"\u30ba":0.902,"\u30bb":0.93,"\u30bc":0.949,"\u30bd":0.754,"\u30be":0.855,"\u30bf":0.785,"\u30c0":0.91,"\u30c1":0.965,"\u30c2":0.945,"\u30c3":0.734,"\u30c4":0.848,"\u30c5":0.922,"\u30c6":0.902,"\u30c8":0.59,"\u30c9":0.707,"\u30ca":0.973,"\u30cb":0.91,"\u30cc":0.805,"\u30cd":0.922,"\u30ce":0.699,"\u30cf":0.977,"\u30d0":0.977,"\u30d1":0.977,"\u30d2":0.656,"\u30d3":0.852,"\u30d4":0.844,"\u30d5":0.844,"\u30d6":0.945,"\u30d7":0.945,"\u30db":0.883,"\u30dc":0.922,"\u30dd":0.922,"\u30de":0.93,"\u30df":0.609,"\u30e0":0.863,"\u30e1":0.676,"\u30e2":0.941,"\u30e3":0.789,"\u30e4":0.926,"\u30e5":0.793,"\u30e6":0.941,"\u30e7":0.598,"\u30e8":0.703,"\u30e9":0.766,"\u30ea":0.609,"\u30eb":0.98,"\u30ec":0.832,"\u30ed":0.785,"\u30ee":0.699,"\u30ef":0.805,"\u30f0":0.965,"\u30f1":0.961,"\u30f2":0.785,"\u30f3":0.863,"\u30f4":0.883,"\u30f5":0.695,"\u30f6":0.766,"\u30f7":0.848,"\u30f8":0.977,"\u30f9":0.91,"\u30fa":0.887},
+  "BIZ UDPゴシック": {"\u3000":0.667,"\u3001":0.6,"\u3002":0.6,"\u3008":0.5,"\u3009":0.5,"\u300a":0.5,"\u300b":0.5,"\u300c":0.5,"\u300d":0.5,"\u300e":0.5,"\u300f":0.5,"\u3010":0.5,"\u3011":0.5,"\u3014":0.5,"\u3015":0.5,"\u3041":0.91,"\u3042":0.98,"\u3043":0.9,"\u3045":0.84,"\u3046":0.91,"\u3047":0.86,"\u3048":0.93,"\u3049":0.91,"\u304a":0.98,"\u304d":0.98,"\u304f":0.85,"\u3050":0.95,"\u3051":0.96,"\u3053":0.89,"\u3054":0.97,"\u3055":0.98,"\u3057":0.85,"\u3058":0.91,"\u3059":0.95,"\u305a":0.98,"\u305b":0.97,"\u305d":0.94,"\u305f":0.98,"\u3061":0.96,"\u3063":0.9,"\u3064":0.98,"\u3066":0.97,"\u3067":0.98,"\u3068":0.94,"\u3069":0.98,"\u306a":0.98,"\u306b":0.97,"\u306c":0.98,"\u3072":0.98,"\u3075":0.98,"\u3078":0.98,"\u307e":0.94,"\u307f":0.98,"\u3080":0.98,"\u3081":0.98,"\u3082":0.95,"\u3083":0.89,"\u3084":0.97,"\u3085":0.89,"\u3086":0.98,"\u3087":0.84,"\u3088":0.96,"\u3089":0.92,"\u308a":0.88,"\u308b":0.96,"\u308c":0.98,"\u308d":0.95,"\u308e":0.89,"\u3090":0.98,"\u3091":0.98,"\u3092":0.98,"\u3093":0.94,"\u3094":0.97,"\u3095":0.94,"\u3096":0.88,"\u30a1":0.87,"\u30a2":0.89,"\u30a3":0.83,"\u30a4":0.79,"\u30a5":0.86,"\u30a6":0.92,"\u30a7":0.85,"\u30a8":0.88,"\u30a9":0.85,"\u30aa":0.92,"\u30ab":0.94,"\u30ac":0.98,"\u30ad":0.96,"\u30af":0.87,"\u30b0":0.97,"\u30b1":0.94,"\u30b2":0.98,"\u30b3":0.89,"\u30b4":0.96,"\u30b5":0.96,"\u30b7":0.89,"\u30b8":0.95,"\u30b9":0.93,"\u30ba":0.98,"\u30bb":0.93,"\u30bc":0.97,"\u30bd":0.89,"\u30be":0.96,"\u30bf":0.88,"\u30c0":0.97,"\u30c1":0.94,"\u30c3":0.85,"\u30c4":0.92,"\u30c5":0.98,"\u30c6":0.94,"\u30c8":0.76,"\u30c9":0.84,"\u30ca":0.94,"\u30cb":0.92,"\u30cc":0.87,"\u30cd":0.92,"\u30ce":0.83,"\u30cf":0.96,"\u30d2":0.88,"\u30d3":0.97,"\u30d4":0.96,"\u30d5":0.9,"\u30d6":0.98,"\u30d7":0.98,"\u30d8":0.93,"\u30d9":0.96,"\u30da":0.96,"\u30db":0.96,"\u30de":0.92,"\u30df":0.88,"\u30e0":0.9,"\u30e1":0.92,"\u30e2":0.95,"\u30e3":0.85,"\u30e4":0.93,"\u30e5":0.84,"\u30e6":0.96,"\u30e7":0.82,"\u30e8":0.91,"\u30e9":0.93,"\u30ea":0.84,"\u30eb":0.98,"\u30ec":0.87,"\u30ed":0.94,"\u30ee":0.85,"\u30ef":0.94,"\u30f0":0.94,"\u30f1":0.95,"\u30f2":0.9,"\u30f3":0.91,"\u30f4":0.97,"\u30f5":0.83,"\u30f6":0.86,"\u30fa":0.98,"\u30fc":0.96},
+  "BIZ UDP明朝": {"\u3000":0.667,"\u3001":0.6,"\u3002":0.6,"\u3008":0.5,"\u3009":0.5,"\u300a":0.5,"\u300b":0.5,"\u300c":0.5,"\u300d":0.5,"\u300e":0.5,"\u300f":0.5,"\u3010":0.5,"\u3011":0.5,"\u3014":0.5,"\u3015":0.5,"\u3041":0.85,"\u3042":0.96,"\u3043":0.86,"\u3044":0.98,"\u3045":0.71,"\u3046":0.8,"\u3047":0.8,"\u3048":0.9,"\u3049":0.81,"\u304a":0.93,"\u304b":0.98,"\u304c":0.98,"\u304d":0.86,"\u304e":0.93,"\u304f":0.72,"\u3050":0.84,"\u3051":0.93,"\u3052":0.96,"\u3053":0.82,"\u3054":0.9,"\u3055":0.83,"\u3056":0.93,"\u3057":0.81,"\u3058":0.86,"\u3059":0.96,"\u305a":0.98,"\u305b":0.98,"\u305d":0.93,"\u305e":0.95,"\u305f":0.91,"\u3060":0.94,"\u3061":0.86,"\u3062":0.9,"\u3063":0.84,"\u3064":0.95,"\u3065":0.96,"\u3066":0.91,"\u3067":0.96,"\u3068":0.79,"\u3069":0.86,"\u306a":0.9,"\u306b":0.9,"\u306c":0.96,"\u306d":0.96,"\u306e":0.96,"\u306f":0.96,"\u3070":0.97,"\u3071":0.97,"\u3072":0.93,"\u3073":0.95,"\u3074":0.94,"\u3075":0.98,"\u3078":0.96,"\u3079":0.97,"\u307a":0.96,"\u307b":0.97,"\u307c":0.98,"\u307d":0.98,"\u307e":0.86,"\u307f":0.97,"\u3080":0.98,"\u3081":0.98,"\u3082":0.89,"\u3083":0.83,"\u3084":0.95,"\u3085":0.84,"\u3086":0.97,"\u3087":0.69,"\u3088":0.87,"\u3089":0.86,"\u308a":0.79,"\u308b":0.87,"\u308c":0.97,"\u308d":0.87,"\u308e":0.85,"\u308f":0.97,"\u3090":0.95,"\u3091":0.96,"\u3092":0.91,"\u3093":0.95,"\u3094":0.9,"\u3095":0.85,"\u3096":0.8,"\u30a1":0.77,"\u30a2":0.88,"\u30a3":0.73,"\u30a4":0.79,"\u30a5":0.76,"\u30a6":0.84,"\u30a7":0.83,"\u30a8":0.96,"\u30a9":0.82,"\u30aa":0.92,"\u30ab":0.9,"\u30ac":0.94,"\u30ad":0.89,"\u30ae":0.93,"\u30af":0.84,"\u30b0":0.95,"\u30b1":0.9,"\u30b2":0.95,"\u30b3":0.84,"\u30b4":0.91,"\u30b5":0.96,"\u30b6":0.96,"\u30b7":0.9,"\u30b8":0.91,"\u30b9":0.92,"\u30ba":0.95,"\u30bb":0.9,"\u30bc":0.95,"\u30bd":0.79,"\u30be":0.91,"\u30bf":0.84,"\u30c0":0.94,"\u30c1":0.9,"\u30c2":0.96,"\u30c3":0.77,"\u30c4":0.89,"\u30c5":0.96,"\u30c6":0.88,"\u30c7":0.96,"\u30c8":0.7,"\u30c9":0.79,"\u30ca":0.91,"\u30cb":0.94,"\u30cc":0.81,"\u30cd":0.9,"\u30ce":0.79,"\u30cf":0.97,"\u30d1":0.98,"\u30d2":0.84,"\u30d3":0.89,"\u30d4":0.89,"\u30d5":0.84,"\u30d6":0.93,"\u30d7":0.93,"\u30d8":0.96,"\u30d9":0.97,"\u30da":0.97,"\u30db":0.93,"\u30dc":0.94,"\u30dd":0.94,"\u30de":0.92,"\u30df":0.77,"\u30e0":0.9,"\u30e1":0.81,"\u30e2":0.88,"\u30e3":0.8,"\u30e4":0.91,"\u30e5":0.85,"\u30e6":0.98,"\u30e7":0.74,"\u30e8":0.84,"\u30e9":0.8,"\u30ea":0.77,"\u30eb":0.93,"\u30ec":0.81,"\u30ed":0.9,"\u30ee":0.74,"\u30ef":0.83,"\u30f0":0.91,"\u30f1":0.96,"\u30f2":0.8,"\u30f3":0.85,"\u30f4":0.92,"\u30f5":0.78,"\u30f6":0.78,"\u30f7":0.93,"\u30f8":0.96,"\u30f9":0.97,"\u30fa":0.93,"\u30fc":0.95},
+  "UD デジタル 教科書体 NK-R": {"\u3000":0.5,"\u3001":0.5,"\u3002":0.5,"\u3003":0.72,"\u3005":0.83,"\u3006":0.81,"\u3007":0.84,"\u3008":0.62,"\u3009":0.62,"\u300a":0.65,"\u300b":0.65,"\u300c":0.62,"\u300d":0.62,"\u300e":0.65,"\u300f":0.65,"\u3010":0.62,"\u3011":0.62,"\u3014":0.62,"\u3015":0.62,"\u301c":0.82,"\u301d":0.53,"\u301f":0.53,"\u3041":0.75,"\u3042":0.92,"\u3043":0.81,"\u3044":0.93,"\u3045":0.62,"\u3046":0.73,"\u3047":0.69,"\u3048":0.85,"\u3049":0.77,"\u304a":0.92,"\u304b":0.98,"\u304d":0.81,"\u304e":0.88,"\u304f":0.66,"\u3050":0.81,"\u3051":0.88,"\u3052":0.96,"\u3053":0.79,"\u3054":0.89,"\u3055":0.81,"\u3056":0.92,"\u3057":0.78,"\u3058":0.78,"\u3059":0.88,"\u305a":0.94,"\u305b":0.96,"\u305c":0.98,"\u305d":0.84,"\u305e":0.88,"\u305f":0.92,"\u3060":0.92,"\u3061":0.85,"\u3062":0.9,"\u3063":0.75,"\u3064":0.95,"\u3065":0.96,"\u3066":0.86,"\u3067":0.98,"\u3068":0.77,"\u3069":0.89,"\u306a":0.91,"\u306b":0.91,"\u306c":0.97,"\u306d":0.95,"\u306e":0.95,"\u306f":0.92,"\u3070":0.98,"\u3071":0.97,"\u3072":0.94,"\u3073":0.97,"\u3074":0.97,"\u3075":0.96,"\u3076":0.96,"\u3077":0.96,"\u3078":0.96,"\u3079":0.96,"\u307a":0.96,"\u307b":0.93,"\u307e":0.82,"\u307f":0.94,"\u3080":0.93,"\u3081":0.96,"\u3082":0.82,"\u3083":0.77,"\u3084":0.94,"\u3085":0.79,"\u3086":0.96,"\u3087":0.71,"\u3088":0.83,"\u3089":0.8,"\u308a":0.74,"\u308b":0.83,"\u308c":0.96,"\u308d":0.84,"\u308e":0.79,"\u308f":0.96,"\u3090":0.94,"\u3091":0.95,"\u3092":0.87,"\u3093":0.91,"\u3094":0.83,"\u3095":0.86,"\u3096":0.77,"\u30a1":0.73,"\u30a2":0.88,"\u30a3":0.64,"\u30a4":0.76,"\u30a5":0.72,"\u30a6":0.86,"\u30a7":0.78,"\u30a8":0.94,"\u30a9":0.72,"\u30aa":0.86,"\u30ab":0.88,"\u30ac":0.95,"\u30ad":0.88,"\u30ae":0.92,"\u30af":0.78,"\u30b0":0.92,"\u30b1":0.88,"\u30b2":0.92,"\u30b3":0.84,"\u30b4":0.91,"\u30b5":0.94,"\u30b6":0.98,"\u30b7":0.88,"\u30b8":0.895,"\u30b9":0.87,"\u30ba":0.93,"\u30bb":0.92,"\u30bc":0.97,"\u30bd":0.81,"\u30be":0.93,"\u30bf":0.8,"\u30c0":0.93,"\u30c1":0.91,"\u30c2":0.95,"\u30c3":0.73,"\u30c4":0.88,"\u30c5":0.97,"\u30c6":0.9,"\u30c7":0.97,"\u30c8":0.65,"\u30c9":0.72,"\u30ca":0.9,"\u30cb":0.95,"\u30cc":0.78,"\u30cd":0.89,"\u30ce":0.71,"\u30cf":0.98,"\u30d0":0.98,"\u30d1":0.98,"\u30d2":0.8,"\u30d3":0.87,"\u30d4":0.88,"\u30d5":0.79,"\u30d6":0.92,"\u30d7":0.92,"\u30d8":0.98,"\u30d9":0.98,"\u30da":0.98,"\u30db":0.9,"\u30dc":0.94,"\u30dd":0.93,"\u30de":0.9,"\u30df":0.74,"\u30e0":0.86,"\u30e1":0.75,"\u30e2":0.89,"\u30e3":0.73,"\u30e4":0.9,"\u30e5":0.78,"\u30e6":0.95,"\u30e7":0.65,"\u30e8":0.78,"\u30e9":0.82,"\u30ea":0.72,"\u30eb":0.93,"\u30ec":0.79,"\u30ed":0.88,"\u30ee":0.7,"\u30ef":0.84,"\u30f0":0.96,"\u30f1":0.94,"\u30f2":0.77,"\u30f3":0.83,"\u30f4":0.94,"\u30f5":0.75,"\u30f6":0.73,"\u30f7":0.95,"\u30f8":0.97,"\u30f9":0.96,"\u30fa":0.9,"\u30fc":0.92},
+  "UD デジタル 教科書体 NK-B": {"\u3000":0.56,"\u3001":0.56,"\u3002":0.56,"\u3003":0.792,"\u3005":0.872,"\u3006":0.858,"\u3007":0.912,"\u3008":0.638,"\u3009":0.638,"\u300a":0.662,"\u300b":0.662,"\u300c":0.638,"\u300d":0.638,"\u300e":0.68,"\u300f":0.68,"\u3010":0.638,"\u3011":0.638,"\u3014":0.638,"\u3015":0.638,"\u301c":0.892,"\u301d":0.566,"\u301f":0.566,"\u3041":0.786,"\u3042":0.944,"\u3043":0.84,"\u3044":0.96,"\u3045":0.66,"\u3046":0.76,"\u3047":0.738,"\u3048":0.865,"\u3049":0.8,"\u304a":0.95,"\u304b":0.985,"\u304d":0.838,"\u304e":0.92,"\u304f":0.696,"\u3050":0.846,"\u3051":0.898,"\u3052":0.976,"\u3053":0.814,"\u3054":0.908,"\u3055":0.846,"\u3056":0.938,"\u3057":0.78,"\u3058":0.822,"\u3059":0.904,"\u305a":0.952,"\u305b":0.972,"\u305d":0.864,"\u305e":0.922,"\u305f":0.932,"\u3060":0.95,"\u3061":0.862,"\u3062":0.918,"\u3063":0.786,"\u3064":0.962,"\u3065":0.972,"\u3066":0.878,"\u3067":0.98,"\u3068":0.8,"\u3069":0.908,"\u306a":0.946,"\u306b":0.94,"\u306c":0.988,"\u306d":0.974,"\u306e":0.968,"\u306f":0.944,"\u3071":0.988,"\u3072":0.973,"\u3073":0.976,"\u3074":0.976,"\u3075":0.984,"\u3076":0.984,"\u3077":0.984,"\u3078":0.972,"\u3079":0.978,"\u307a":0.978,"\u307b":0.954,"\u307e":0.856,"\u307f":0.97,"\u3080":0.96,"\u3081":0.972,"\u3082":0.835,"\u3083":0.806,"\u3084":0.952,"\u3085":0.835,"\u3086":0.984,"\u3087":0.72,"\u3088":0.86,"\u3089":0.812,"\u308a":0.782,"\u308b":0.854,"\u308c":0.978,"\u308d":0.864,"\u308e":0.84,"\u308f":0.978,"\u3090":0.964,"\u3091":0.962,"\u3092":0.888,"\u3093":0.928,"\u3094":0.872,"\u3095":0.866,"\u3096":0.8,"\u30a1":0.766,"\u30a2":0.904,"\u30a3":0.669,"\u30a4":0.772,"\u30a5":0.768,"\u30a6":0.89,"\u30a7":0.82,"\u30a8":0.964,"\u30a9":0.756,"\u30aa":0.89,"\u30ab":0.898,"\u30ac":0.962,"\u30ad":0.892,"\u30ae":0.952,"\u30af":0.798,"\u30b0":0.93,"\u30b1":0.892,"\u30b2":0.962,"\u30b3":0.876,"\u30b4":0.952,"\u30b5":0.952,"\u30b7":0.904,"\u30b8":0.928,"\u30b9":0.894,"\u30ba":0.972,"\u30bb":0.926,"\u30bc":0.98,"\u30bd":0.828,"\u30be":0.95,"\u30bf":0.812,"\u30c0":0.946,"\u30c1":0.916,"\u30c2":0.975,"\u30c3":0.76,"\u30c4":0.898,"\u30c5":0.974,"\u30c6":0.924,"\u30c8":0.698,"\u30c9":0.783,"\u30ca":0.912,"\u30cb":0.968,"\u30cc":0.798,"\u30cd":0.908,"\u30ce":0.734,"\u30cf":0.986,"\u30d0":0.986,"\u30d1":0.986,"\u30d2":0.836,"\u30d3":0.919,"\u30d4":0.916,"\u30d5":0.82,"\u30d6":0.96,"\u30d7":0.96,"\u30d8":0.98,"\u30d9":0.986,"\u30da":0.986,"\u30db":0.93,"\u30dc":0.982,"\u30dd":0.954,"\u30de":0.924,"\u30df":0.776,"\u30e0":0.89,"\u30e1":0.786,"\u30e2":0.914,"\u30e3":0.766,"\u30e4":0.912,"\u30e5":0.8,"\u30e6":0.962,"\u30e7":0.7,"\u30e8":0.816,"\u30e9":0.856,"\u30ea":0.756,"\u30eb":0.948,"\u30ec":0.826,"\u30ed":0.928,"\u30ee":0.736,"\u30ef":0.876,"\u30f0":0.972,"\u30f1":0.964,"\u30f2":0.818,"\u30f3":0.866,"\u30f4":0.958,"\u30f5":0.778,"\u30f6":0.766,"\u30f7":0.962,"\u30f9":0.984,"\u30fa":0.921,"\u30fc":0.932}
+};
+
+// ユーザーがアップロードした実フォントファイルが正常に登録できたフォント名の集合。
+// ここに含まれるフォントは、上記の推測値/実測テーブルよりも実測(Canvas)を優先する
+// (本物のフォントで直接測れるため、推測が一切不要になる)。
+const uploadedFontFamilies = new Set();
+
 // 文字ごとの実測幅をキャッシュする(同じ文字/フォント/サイズの組み合わせに対する
 // Canvas測定を使い回す。widthScale探索で同じ文字集合を何度も評価するための高速化と、
 // スケール係数を「測定後に掛け算するだけ」にするための土台を兼ねる)。
 const charWidthCache = new Map();
 function rawCharWidthPt(ch, m){
-  if (ch === "\u3000" && hasNarrowIdeographicSpace(m.font)) return m.sz * NARROW_SPACE_RATIO;
-  if (isFullWidthChar(ch)) return m.sz;         // 全角は実測せず sz×1.0 で確定
-  if (isHalfWidthKana(ch)) return m.sz * 0.5;   // 半角カナは sz×0.5 で確定
+  // 実フォントファイルがアップロードされている場合は、以下のいずれの推測・実測
+  // テーブルよりもそれ自体の実測(Canvas、本物のフォントで直接測れる)を優先する。
+  if (!uploadedFontFamilies.has(m.font)){
+    const table = FONT_METRICS_TABLE[m.font];
+    if (table && Object.prototype.hasOwnProperty.call(table, ch)) return m.sz * table[ch];
+    if (isFullWidthChar(ch)) return m.sz;         // 全角は実測せず sz×1.0 で確定
+    if (isHalfWidthKana(ch)) return m.sz * 0.5;   // 半角カナは sz×0.5 で確定
+  }
   const key = ch + "\u0000" + m.font + "\u0000" + m.sz + "\u0000" + (m.bold?1:0) + "\u0000" + (m.italic?1:0);
   let w = charWidthCache.get(key);
   if (w === undefined){
@@ -1594,7 +1624,188 @@ async function processPptx(arrayBuffer, onProgress, onFontWarning){
   return await zip.generateAsync({ type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 }
 
-/* ---------------- UI 配線 ---------------- */
+/* ============================================================
+ * ユーザーがアップロードしたフォントファイルの読み込み。
+ * ファイル名ではなく、フォント自体が内部に持つ名前情報(OpenTypeの name テーブル)
+ * から実際のフォント名(例:「UD デジタル 教科書体 NK-B」)を読み取り、その名前で
+ * FontFace として登録する。これにより、ファイル名がバラバラでも、pptx側の
+ * typeface指定と自動的に一致させることができる。
+ *
+ * 重要: Windowsの日本語フォント(游ゴシック、MS ゴシック、UD デジタル教科書体等)は
+ * ほぼ全て「.ttc」形式で配布されており、1つのファイルの中に複数の書体(例:
+ * 「UD Digi Kyokasho N」「NP」「NK」の3書体)が同梱されている。単純に先頭の
+ * 書体だけを読んでも(またはTTCの生データをそのままFontFaceに渡しても)、
+ * 実際にpptx側が使っている書体(多くの場合、同梱された最後の書体)を正しく
+ * 取得できない。そのため、TTC内の各書体を個別のsfnt(単体フォント)データに
+ * 分割して取り出し、それぞれを別々の名前でFontFace登録する。
+ * ============================================================ */
+function readU16(view, offset){ return view.getUint16(offset, false); }
+function readU32(view, offset){ return view.getUint32(offset, false); }
+
+// sfntオフセット(そのフォントの Offset Table 開始位置)から、テーブルディレクトリを
+// 読み取る。TTC内では複数書体がテーブルを共有し得るため、offsetは常に元ファイル内の
+// 絶対位置を指す。
+function readSfntTables(view, sfntOffset){
+  const sfntVersion = readU32(view, sfntOffset);
+  const numTables = readU16(view, sfntOffset + 4);
+  const tables = [];
+  for (let i = 0; i < numTables; i++){
+    const rec = sfntOffset + 12 + i * 16;
+    const tag = String.fromCharCode(
+      view.getUint8(rec), view.getUint8(rec+1), view.getUint8(rec+2), view.getUint8(rec+3)
+    );
+    tables.push({
+      tag,
+      checksum: readU32(view, rec + 4),
+      offset: readU32(view, rec + 8),
+      length: readU32(view, rec + 12)
+    });
+  }
+  return { sfntVersion, tables };
+}
+
+// name テーブル(絶対オフセット指定)からフォントファミリー名を抽出する。
+// Typographic Family(nameID=16)を優先し、無ければFamily(nameID=1)を使う。
+// 言語は日本語(0x0411)を優先し、無ければ英語(0x0409)、それも無ければ最初の候補を使う。
+function readFamilyNameFromNameTable(view, nameTableOffset){
+  const count = readU16(view, nameTableOffset + 2);
+  const stringOffset = readU16(view, nameTableOffset + 4);
+  const candidates = [];
+  for (let i = 0; i < count; i++){
+    const rec = nameTableOffset + 6 + i * 12;
+    const platformID = readU16(view, rec);
+    const languageID = readU16(view, rec + 4);
+    const nameID = readU16(view, rec + 6);
+    const length = readU16(view, rec + 8);
+    const strOff = readU16(view, rec + 10);
+    if (nameID !== 1 && nameID !== 16) continue;
+    const absOff = nameTableOffset + stringOffset + strOff;
+    let value = "";
+    if (platformID === 1){
+      for (let j = 0; j < length; j++) value += String.fromCharCode(view.getUint8(absOff + j));
+    } else {
+      // Windows(3)/Unicode(0) プラットフォームは UTF-16BE
+      for (let j = 0; j < length; j += 2) value += String.fromCharCode(readU16(view, absOff + j));
+    }
+    candidates.push({ platformID, languageID, nameID, value });
+  }
+  if (!candidates.length) return null;
+  function score(c){
+    let s = 0;
+    if (c.nameID === 16) s += 100;
+    if (c.languageID === 0x0411) s += 10;
+    else if (c.languageID === 0x0409) s += 5;
+    if (c.platformID === 3) s += 1;
+    return s;
+  }
+  candidates.sort((a,b) => score(b) - score(a));
+  return candidates[0].value;
+}
+
+function getNameTableOffset(view, tables){
+  const nameTable = tables.find(t => t.tag === "name");
+  return nameTable ? nameTable.offset : null;
+}
+
+// TTC内の1書体ぶんのテーブル一式を、単体のsfntファイル(通常のTTF/OTFと同じ構造)
+// として再構成する。TTC内ではテーブルが元ファイル中に散らばっている(かつ複数書体で
+// 共有されている)ため、それぞれのテーブルの実データを新しいバッファにコピーし直し、
+// オフセットを新しい位置に付け替える。
+function buildStandaloneFont(buffer, sfntVersion, tables){
+  const numTables = tables.length;
+  let entrySelector = 0;
+  while ((1 << (entrySelector + 1)) <= numTables) entrySelector++;
+  const searchRange = (1 << entrySelector) * 16;
+  const rangeShift = numTables * 16 - searchRange;
+
+  const headerSize = 12 + numTables * 16;
+  let cursor = headerSize;
+  const placements = tables.map(t => {
+    const paddedLen = (t.length + 3) & ~3;
+    const placement = { ...t, newOffset: cursor, paddedLen };
+    cursor += paddedLen;
+    return placement;
+  });
+  const totalSize = cursor;
+
+  const out = new ArrayBuffer(totalSize);
+  const outView = new DataView(out);
+  const outBytes = new Uint8Array(out);
+  const srcBytes = new Uint8Array(buffer);
+
+  outView.setUint32(0, sfntVersion, false);
+  outView.setUint16(4, numTables, false);
+  outView.setUint16(6, searchRange, false);
+  outView.setUint16(8, entrySelector, false);
+  outView.setUint16(10, rangeShift, false);
+
+  placements.forEach((t, i) => {
+    const rec = 12 + i * 16;
+    for (let k = 0; k < 4; k++) outBytes[rec + k] = t.tag.charCodeAt(k);
+    outView.setUint32(rec + 4, t.checksum, false);
+    outView.setUint32(rec + 8, t.newOffset, false);
+    outView.setUint32(rec + 12, t.length, false);
+    outBytes.set(srcBytes.subarray(t.offset, t.offset + t.length), t.newOffset);
+  });
+  return out;
+}
+
+// アップロードされたファイルを解析し、{ name, buffer } の配列を返す。
+// 通常のTTF/OTFは1件、TTC(TrueType Collection)は同梱されている書体の数だけ返す。
+function extractFontFaces(buffer){
+  const view = new DataView(buffer);
+  if (readU32(view, 0) !== 0x74746366){ // 'ttcf' でなければ単体フォント
+    const { tables } = readSfntTables(view, 0);
+    const nameOff = getNameTableOffset(view, tables);
+    const name = nameOff != null ? readFamilyNameFromNameTable(view, nameOff) : null;
+    return [{ name, buffer }];
+  }
+  // TTC: ヘッダのオフセット一覧から書体ごとに分割する
+  const numFonts = readU32(view, 8);
+  const results = [];
+  for (let i = 0; i < numFonts; i++){
+    const sfntOffset = readU32(view, 12 + i * 4);
+    const { sfntVersion, tables } = readSfntTables(view, sfntOffset);
+    const nameOff = getNameTableOffset(view, tables);
+    const name = nameOff != null ? readFamilyNameFromNameTable(view, nameOff) : null;
+    const standalone = buildStandaloneFont(buffer, sfntVersion, tables);
+    results.push({ name, buffer: standalone, index: i });
+  }
+  return results;
+}
+
+async function loadUserFontFiles(files){
+  const loaded = [];
+  const failed = [];
+  for (const file of Array.from(files)){
+    let faces;
+    try{
+      const buffer = await file.arrayBuffer();
+      faces = extractFontFaces(buffer);
+    } catch(e){
+      console.warn("フォントファイルの解析に失敗:", file.name, e);
+      failed.push(file.name);
+      continue;
+    }
+    let anyLoadedForThisFile = false;
+    for (const face of faces){
+      const suffix = face.index != null ? `-${face.index}` : "";
+      const familyName = face.name || `${file.name.replace(/\.[^.]+$/, "")}${suffix}`;
+      try{
+        const fontFace = new FontFace(familyName, face.buffer);
+        await fontFace.load();
+        document.fonts.add(fontFace);
+        uploadedFontFamilies.add(familyName);
+        loaded.push({ file: faces.length > 1 ? `${file.name} (${familyName})` : file.name, family: familyName });
+        anyLoadedForThisFile = true;
+      } catch(e){
+        console.warn(`フォントの読み込みに失敗(${familyName}):`, file.name, e);
+      }
+    }
+    if (!anyLoadedForThisFile) failed.push(file.name);
+  }
+  return { loaded, failed };
+}
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
@@ -1612,6 +1823,40 @@ dropzone.addEventListener("drop", (e) => {
 fileInput.addEventListener("change", (e) => {
   if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
 });
+
+/* ---------------- フォントファイルの読み込み(任意) ---------------- */
+const fontDropzone = document.getElementById("fontDropzone");
+const fontFilesInput = document.getElementById("fontFilesInput");
+const fontLoadStatus = document.getElementById("fontLoadStatus");
+
+async function handleFontFiles(fileList){
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  fontLoadStatus.textContent = `読み込み中…(${files.length}個)`;
+  const { loaded, failed } = await loadUserFontFiles(files);
+  const parts = [];
+  if (loaded.length){
+    parts.push(`読み込み済み(${loaded.length}個): ` + loaded.map(l => `「${l.family}」`).join("、"));
+  }
+  if (failed.length){
+    parts.push(`失敗(${failed.length}個): ` + failed.join("、"));
+  }
+  fontLoadStatus.textContent = parts.length ? parts.join(" / ") : "読み込めるフォントがありませんでした。";
+}
+
+if (fontDropzone && fontFilesInput){
+  fontDropzone.addEventListener("click", () => fontFilesInput.click());
+  fontDropzone.addEventListener("dragover", (e) => { e.preventDefault(); fontDropzone.classList.add("drag"); });
+  fontDropzone.addEventListener("dragleave", () => fontDropzone.classList.remove("drag"));
+  fontDropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    fontDropzone.classList.remove("drag");
+    if (e.dataTransfer.files && e.dataTransfer.files.length) handleFontFiles(e.dataTransfer.files);
+  });
+  fontFilesInput.addEventListener("change", (e) => {
+    if (e.target.files && e.target.files.length) handleFontFiles(e.target.files);
+  });
+}
 
 tryLoadDict();
 
